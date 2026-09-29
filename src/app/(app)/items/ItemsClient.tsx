@@ -20,6 +20,7 @@ export default function ItemsClient({
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<Partial<Item> | null>(null);
   const [uploadSummary, setUploadSummary] = useState<string | null>(null);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const filtered = initialItems.filter(
@@ -94,14 +95,22 @@ export default function ItemsClient({
 
     const { data: existingDepts } = await supabase.from("departments").select("id, name");
     const deptMap = new Map((existingDepts || []).map((d) => [d.name.toLowerCase(), d.id]));
+    const unitMap = new Map(units.map((u) => [u.toLowerCase(), u]));
 
     for (const row of rows) {
       const code = String(row.item_code || "").trim().toUpperCase();
       const name = String(row.item_name || "").trim();
-      const unit = String(row.unit || "").trim();
-      if (!code || !name || !unit) {
+      const rawUnit = String(row.unit || "").trim();
+      const unit = unitMap.get(rawUnit.toLowerCase());
+
+      if (!code || !name || !rawUnit) {
         skipped++;
         errors.push(`Row skipped (missing fields): ${JSON.stringify(row)}`);
+        continue;
+      }
+      if (!unit) {
+        skipped++;
+        errors.push(`${code}: unit "${rawUnit}" not recognized. Valid units: ${units.join(", ")}`);
         continue;
       }
       const { data: existing } = await supabase
@@ -152,6 +161,7 @@ export default function ItemsClient({
         errors.length ? `, Errors: ${errors.length}` : ""
       }`
     );
+    setUploadErrors(errors);
     if (fileRef.current) fileRef.current.value = "";
     router.refresh();
   }
@@ -184,7 +194,16 @@ export default function ItemsClient({
       </div>
 
       {uploadSummary && (
-        <div className="bg-blue-50 text-blue-700 text-sm rounded-lg px-4 py-2">{uploadSummary}</div>
+        <div className="bg-blue-50 text-blue-700 text-sm rounded-lg px-4 py-2 space-y-1">
+          <p>{uploadSummary}</p>
+          {uploadErrors.length > 0 && (
+            <ul className="text-xs text-blue-600 list-disc pl-5 max-h-40 overflow-y-auto">
+              {uploadErrors.map((err, i) => (
+                <li key={i}>{err}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       <input
