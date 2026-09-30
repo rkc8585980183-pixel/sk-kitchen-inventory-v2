@@ -3,17 +3,14 @@ import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 
 function adminClient() {
-  return createServiceClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  return createServiceClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 }
 
 async function requireAdmin() {
   const supabase = await createClient();
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await supabase.auth.getUser(); // verified against Auth server: this route uses the service role
   if (!user) return null;
   const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
   if (!profile || !["admin", "super_admin"].includes(profile.role)) return null;
@@ -65,6 +62,14 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json();
   const { user_id, password, is_active, role, department_id, full_name } = body;
   const admin = adminClient();
+
+  // Admins may only manage department users, and may not change roles.
+  if (caller.role === "admin") {
+    const { data: target } = await admin.from("profiles").select("role").eq("id", user_id).single();
+    if (!target || target.role !== "department_user" || role !== undefined) {
+      return NextResponse.json({ error: "Admins can only manage department users" }, { status: 403 });
+    }
+  }
 
   if (password) {
     const { error } = await admin.auth.admin.updateUserById(user_id, { password });

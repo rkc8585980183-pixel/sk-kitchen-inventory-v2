@@ -1,10 +1,24 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useDeferredValue, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/client";
 import type { Item } from "@/types";
+import Icon from "@/components/Icons";
+import Modal from "@/components/Modal";
+import { useToast } from "@/components/Toast";
+import { Badge, Button, buttonCls, Card, EmptyState, Field, inputCls, Notice, PageHeader, selectCls, td, th } from "@/components/ui";
+import { cn } from "@/lib/utils";
+
+interface UploadRow {
+  code: string;
+  name: string;
+  category: string | null;
+  unit: string;
+  department?: string;
+}
+
+const chunk = <T,>(arr: T[], n: number) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
 
 export default function ItemsClient({
   initialItems,
@@ -16,48 +30,58 @@ export default function ItemsClient({
   canDelete: boolean;
 }) {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
+  const deferred = useDeferredValue(search);
   const [editing, setEditing] = useState<Partial<Item> | null>(null);
-  const [uploadSummary, setUploadSummary] = useState<string | null>(null);
-  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const filtered = initialItems.filter(
-    (i) =>
-      i.item_name.toLowerCase().includes(search.toLowerCase()) ||
-      i.item_code.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = useMemo(() => {
+    const s = deferred.trim().toLowerCase();
+    if (!s) return initialItems;
+    return initialItems.filter((i) => i.item_name.toLowerCase().includes(s) || i.item_code.toLowerCase().includes(s));
+  }, [initialItems, deferred]);
 
   async function saveItem() {
     if (!editing?.item_code || !editing.item_name || !editing.unit) {
-      alert("Item Code, Name and Unit are required.");
+      toast("Item code, name and unit are required.", "error");
       return;
     }
+    setSaving(true);
     const payload = {
       item_code: editing.item_code.trim().toUpperCase(),
-      item_name: editing.item_name,
-      category: editing.category || null,
+      item_name: editing.item_name.trim(),
+      category: editing.category?.trim() || null,
       unit: editing.unit,
     };
     const { error } = editing.id
       ? await supabase.from("items").update(payload).eq("id", editing.id)
       : await supabase.from("items").insert(payload);
-
+    setSaving(false);
     if (error) {
-      alert(error.message);
+      toast(error.message, "error");
       return;
     }
+    toast(editing.id ? "Item updated." : "Item added.");
     setEditing(null);
     router.refresh();
   }
 
   async function toggleActive(item: Item) {
-    await supabase.from("items").update({ is_active: !item.is_active }).eq("id", item.id);
+    const { error } = await supabase.from("items").update({ is_active: !item.is_active }).eq("id", item.id);
+    if (error) return toast(error.message, "error");
+    toast(item.is_active ? "Item deactivated." : "Item activated.");
     router.refresh();
   }
 
-  function downloadTemplate() {
+  // xlsx is ~400 KB: load it only when someone actually clicks download/upload.
+  async function downloadTemplate() {
+    const XLSX = await import("xlsx");
     const ws = XLSX.utils.json_to_sheet([
       { item_code: "ITM001", item_name: "Chocolate Filling", category: "Raw Material", unit: "KG", department: "Janakpuri" },
     ]);
@@ -66,7 +90,8 @@ export default function ItemsClient({
     XLSX.writeFile(wb, "item_upload_template.xlsx");
   }
 
-  function exportItems() {
+  async function exportItems() {
+    const XLSX = await import("xlsx");
     const ws = XLSX.utils.json_to_sheet(
       initialItems.map((i) => ({
         item_code: i.item_code,
@@ -84,220 +109,227 @@ export default function ItemsClient({
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf);
-    const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+    setUploading(true);
+    setSummary(null);
+    const errs: string[] = [];
 
-    let created = 0,
-      updated = 0,
-      skipped = 0;
-    const errors: string[] = [];
+    try {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(await file.arrayBuffer());
+      const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
 
-    const { data: existingDepts } = await supabase.from("departments").select("id, name");
-    const deptMap = new Map((existingDepts || []).map((d) => [d.name.toLowerCase(), d.id]));
-    const unitMap = new Map(units.map((u) => [u.toLowerCase(), u]));
+      const unitMap = new Map(units.map((u) => [u.toLowerCase(), u]));
+      const valid = new Map<string, UploadRow>();
+      let skipped = 0;
 
-    for (const row of rows) {
-      const code = String(row.item_code || "").trim().toUpperCase();
-      const name = String(row.item_name || "").trim();
-      const rawUnit = String(row.unit || "").trim();
-      const unit = unitMap.get(rawUnit.toLowerCase());
-
-      if (!code || !name || !rawUnit) {
-        skipped++;
-        errors.push(`Row skipped (missing fields): ${JSON.stringify(row)}`);
-        continue;
-      }
-      if (!unit) {
-        skipped++;
-        errors.push(`${code}: unit "${rawUnit}" not recognized. Valid units: ${units.join(", ")}`);
-        continue;
-      }
-      const { data: existing } = await supabase
-        .from("items")
-        .select("id")
-        .eq("item_code", code)
-        .maybeSingle();
-
-      let itemId = existing?.id;
-      if (existing) {
-        const { error } = await supabase
-          .from("items")
-          .update({ item_name: name, category: row.category || null, unit })
-          .eq("id", existing.id);
-        if (error) {
-          errors.push(`${code}: ${error.message}`);
+      for (const row of rows) {
+        const code = String(row.item_code ?? "").trim().toUpperCase();
+        const name = String(row.item_name ?? "").trim();
+        const rawUnit = String(row.unit ?? "").trim();
+        if (!code || !name || !rawUnit) {
+          skipped++;
+          errs.push(`Row skipped (missing fields): ${JSON.stringify(row)}`);
           continue;
         }
-        updated++;
-      } else {
-        const { data: inserted, error } = await supabase
-          .from("items")
-          .insert({ item_code: code, item_name: name, category: row.category || null, unit })
-          .select("id")
-          .single();
-        if (error) {
-          errors.push(`${code}: ${error.message}`);
+        const unit = unitMap.get(rawUnit.toLowerCase());
+        if (!unit) {
+          skipped++;
+          errs.push(`${code}: unit "${rawUnit}" not recognized. Valid units: ${units.join(", ")}`);
           continue;
         }
-        itemId = inserted.id;
-        created++;
+        valid.set(code, {
+          code,
+          name,
+          unit,
+          category: row.category ? String(row.category) : null,
+          department: row.department ? String(row.department).trim() : undefined,
+        });
       }
 
-      if (row.department && itemId) {
-        const deptId = deptMap.get(String(row.department).trim().toLowerCase());
-        if (deptId) {
-          await supabase
-            .from("item_mappings")
-            .upsert({ item_id: itemId, department_id: deptId }, { onConflict: "item_id,department_id" });
-        } else {
-          errors.push(`${code}: department "${row.department}" not found`);
+      // One read for existing items + departments (was: one query per row).
+      const [existingRes, deptRes] = await Promise.all([
+        supabase.from("items").select("id, item_code"),
+        supabase.from("departments").select("id, name"),
+      ]);
+      const idByCode = new Map((existingRes.data ?? []).map((i) => [i.item_code, i.id as string]));
+      const deptMap = new Map((deptRes.data ?? []).map((d) => [d.name.toLowerCase(), d.id as string]));
+
+      const all = Array.from(valid.values());
+      const toInsert = all.filter((r) => !idByCode.has(r.code));
+      const toUpdate = all.filter((r) => idByCode.has(r.code));
+      let created = 0;
+      let updated = 0;
+
+      // inserts: batches of 200; if a batch fails, retry row by row to report the exact bad row
+      for (const batch of chunk(toInsert, 200)) {
+        const payload = batch.map((r) => ({ item_code: r.code, item_name: r.name, category: r.category, unit: r.unit }));
+        const { data, error } = await supabase.from("items").insert(payload).select("id, item_code");
+        if (!error && data) {
+          data.forEach((d) => idByCode.set(d.item_code, d.id));
+          created += data.length;
+          continue;
+        }
+        for (const p of payload) {
+          const one = await supabase.from("items").insert(p).select("id, item_code").single();
+          if (one.error) errs.push(`${p.item_code}: ${one.error.message}`);
+          else {
+            idByCode.set(one.data.item_code, one.data.id);
+            created++;
+          }
         }
       }
+
+      // updates: 10 in parallel
+      for (const batch of chunk(toUpdate, 10)) {
+        const results = await Promise.all(
+          batch.map((r) =>
+            supabase.from("items").update({ item_name: r.name, category: r.category, unit: r.unit }).eq("id", idByCode.get(r.code)!)
+          )
+        );
+        results.forEach((res, i) => {
+          if (res.error) errs.push(`${batch[i].code}: ${res.error.message}`);
+          else updated++;
+        });
+      }
+
+      // mappings: one batched upsert
+      const mappings: { item_id: string; department_id: string }[] = [];
+      for (const r of all) {
+        if (!r.department) continue;
+        const deptId = deptMap.get(r.department.toLowerCase());
+        const itemId = idByCode.get(r.code);
+        if (!deptId) errs.push(`${r.code}: department "${r.department}" not found`);
+        else if (itemId) mappings.push({ item_id: itemId, department_id: deptId });
+      }
+      for (const batch of chunk(mappings, 500)) {
+        const { error } = await supabase.from("item_mappings").upsert(batch, { onConflict: "item_id,department_id" });
+        if (error) errs.push(`Mapping error: ${error.message}`);
+      }
+
+      setSummary(`Created ${created} · Updated ${updated} · Skipped ${skipped}${errs.length ? ` · ${errs.length} issue(s)` : ""}`);
+      toast("Upload finished.");
+      router.refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Upload failed.", "error");
+    } finally {
+      setErrors(errs);
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
     }
-
-    setUploadSummary(
-      `Created: ${created}, Updated: ${updated}, Skipped: ${skipped}${
-        errors.length ? `, Errors: ${errors.length}` : ""
-      }`
-    );
-    setUploadErrors(errors);
-    if (fileRef.current) fileRef.current.value = "";
-    router.refresh();
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Item Master</h1>
-          <p className="text-sm text-gray-500">{initialItems.length} items</p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={downloadTemplate} className="px-3 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">
-            Download Template
-          </button>
-          <button onClick={exportItems} className="px-3 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">
-            Export Excel
-          </button>
-          <label className="px-3 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50 cursor-pointer">
-            Bulk Upload
-            <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleUpload} className="hidden" />
-          </label>
-          <button
-            onClick={() => setEditing({ item_code: "", item_name: "", category: "", unit: units[0] })}
-            className="px-3 py-2 text-sm rounded-lg bg-orange-500 text-white hover:bg-orange-600"
-          >
-            + Add Item
-          </button>
-        </div>
-      </div>
-
-      {uploadSummary && (
-        <div className="bg-blue-50 text-blue-700 text-sm rounded-lg px-4 py-2 space-y-1">
-          <p>{uploadSummary}</p>
-          {uploadErrors.length > 0 && (
-            <ul className="text-xs text-blue-600 list-disc pl-5 max-h-40 overflow-y-auto">
-              {uploadErrors.map((err, i) => (
-                <li key={i}>{err}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      <input
-        placeholder="Search by code or name..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="border border-gray-300 rounded-lg text-sm px-3 py-2 w-64"
+    <div>
+      <PageHeader
+        title="Item master"
+        subtitle={`${initialItems.length} items`}
+        actions={
+          <>
+            <Button icon="download" onClick={downloadTemplate}>Template</Button>
+            <Button icon="file" onClick={exportItems}>Export</Button>
+            <label className={cn(buttonCls("secondary"), "cursor-pointer", uploading && "pointer-events-none opacity-50")}>
+              <Icon name="upload" size={16} /> {uploading ? "Uploading..." : "Bulk upload"}
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleUpload} className="hidden" />
+            </label>
+            <Button variant="primary" icon="plus" onClick={() => setEditing({ item_code: "", item_name: "", category: "", unit: units[0] })}>
+              Add item
+            </Button>
+          </>
+        }
       />
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500 border-b border-gray-100">
-              <th className="px-4 py-2 font-medium">Code</th>
-              <th className="px-4 py-2 font-medium">Name</th>
-              <th className="px-4 py-2 font-medium">Category</th>
-              <th className="px-4 py-2 font-medium">Unit</th>
-              <th className="px-4 py-2 font-medium">Status</th>
-              <th className="px-4 py-2 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((i) => (
-              <tr key={i.id} className="border-b border-gray-50 last:border-0">
-                <td className="px-4 py-2 text-gray-500">{i.item_code}</td>
-                <td className="px-4 py-2 text-gray-900">{i.item_name}</td>
-                <td className="px-4 py-2 text-gray-500">{i.category || "-"}</td>
-                <td className="px-4 py-2 text-gray-500">{i.unit}</td>
-                <td className="px-4 py-2">
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${i.is_active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                    {i.is_active ? "Active" : "Inactive"}
-                  </span>
-                </td>
-                <td className="px-4 py-2 space-x-2">
-                  <button onClick={() => setEditing(i)} className="text-orange-600 text-xs font-medium">
-                    Edit
-                  </button>
-                  {canDelete && (
-                    <button onClick={() => toggleActive(i)} className="text-gray-500 text-xs font-medium">
-                      {i.is_active ? "Deactivate" : "Activate"}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {editing && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-3">
-            <h2 className="font-semibold text-gray-900">{editing.id ? "Edit Item" : "Add Item"}</h2>
-            <input
-              placeholder="Item Code"
-              value={editing.item_code || ""}
-              disabled={!!editing.id}
-              onChange={(e) => setEditing({ ...editing, item_code: e.target.value })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm disabled:bg-gray-100"
-            />
-            <input
-              placeholder="Item Name"
-              value={editing.item_name || ""}
-              onChange={(e) => setEditing({ ...editing, item_name: e.target.value })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            />
-            <input
-              placeholder="Category"
-              value={editing.category || ""}
-              onChange={(e) => setEditing({ ...editing, category: e.target.value })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            />
-            <select
-              value={editing.unit || units[0]}
-              onChange={(e) => setEditing({ ...editing, unit: e.target.value })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            >
-              {units.map((u) => (
-                <option key={u} value={u}>
-                  {u}
-                </option>
-              ))}
-            </select>
-            <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => setEditing(null)} className="px-4 py-2 text-sm rounded-lg border border-gray-300">
-                Cancel
-              </button>
-              <button onClick={saveItem} className="px-4 py-2 text-sm rounded-lg bg-orange-500 text-white">
-                Save
-              </button>
-            </div>
-          </div>
+      {summary && (
+        <div className="mb-4">
+          <Notice tone={errors.length ? "warning" : "success"} icon={errors.length ? "alert" : "check"}>
+            <p className="font-medium">{summary}</p>
+            {errors.length > 0 && (
+              <ul className="mt-2 max-h-40 list-disc space-y-0.5 overflow-y-auto pl-5 text-xs">
+                {errors.map((er, i) => (
+                  <li key={i}>{er}</li>
+                ))}
+              </ul>
+            )}
+          </Notice>
         </div>
       )}
+
+      <Card className="overflow-hidden">
+        <div className="border-b border-slate-100 p-4">
+          <div className="relative max-w-sm">
+            <Icon name="search" size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input placeholder="Search by code or name" value={search} onChange={(e) => setSearch(e.target.value)} className={cn(inputCls, "pl-9")} />
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px]">
+            <thead className="bg-slate-50/70">
+              <tr>
+                <th className={th}>Code</th>
+                <th className={th}>Name</th>
+                <th className={th}>Category</th>
+                <th className={th}>Unit</th>
+                <th className={th}>Status</th>
+                <th className={cn(th, "text-right")}>Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.map((i) => (
+                <tr key={i.id} className="transition hover:bg-slate-50/60">
+                  <td className={cn(td, "font-mono text-xs")}>{i.item_code}</td>
+                  <td className={cn(td, "font-medium text-slate-900")}>{i.item_name}</td>
+                  <td className={td}>{i.category || "—"}</td>
+                  <td className={td}>{i.unit}</td>
+                  <td className={td}>
+                    <Badge tone={i.is_active ? "green" : "slate"} dot>{i.is_active ? "Active" : "Inactive"}</Badge>
+                  </td>
+                  <td className={cn(td, "space-x-1 text-right whitespace-nowrap")}>
+                    <Button size="sm" variant="ghost" icon="pencil" onClick={() => setEditing(i)}>Edit</Button>
+                    {canDelete && (
+                      <Button size="sm" variant="ghost" onClick={() => toggleActive(i)}>
+                        {i.is_active ? "Deactivate" : "Activate"}
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filtered.length === 0 && <EmptyState icon="items" title="No items found">Try a different search or add a new item.</EmptyState>}
+        </div>
+      </Card>
+
+      <Modal
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        title={editing?.id ? "Edit item" : "Add item"}
+        footer={
+          <>
+            <Button onClick={() => setEditing(null)}>Cancel</Button>
+            <Button variant="primary" loading={saving} onClick={saveItem}>Save</Button>
+          </>
+        }
+      >
+        {editing && (
+          <>
+            <Field label="Item code">
+              <input value={editing.item_code || ""} disabled={!!editing.id} onChange={(e) => setEditing({ ...editing, item_code: e.target.value })} className={inputCls} placeholder="ITM001" />
+            </Field>
+            <Field label="Item name">
+              <input value={editing.item_name || ""} onChange={(e) => setEditing({ ...editing, item_name: e.target.value })} className={inputCls} />
+            </Field>
+            <Field label="Category">
+              <input value={editing.category || ""} onChange={(e) => setEditing({ ...editing, category: e.target.value })} className={inputCls} placeholder="Optional" />
+            </Field>
+            <Field label="Unit">
+              <select value={editing.unit || units[0]} onChange={(e) => setEditing({ ...editing, unit: e.target.value })} className={selectCls}>
+                {units.map((u) => (
+                  <option key={u} value={u}>{u}</option>
+                ))}
+              </select>
+            </Field>
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

@@ -2,22 +2,16 @@ import { createClient } from "@/lib/supabase/server";
 import { getCurrentProfile } from "@/lib/auth";
 import UsersClient from "./UsersClient";
 
+export const metadata = { title: "Users" };
+
 export default async function UsersPage() {
   const profile = await getCurrentProfile();
   const supabase = await createClient();
 
-  const { data: users } = await supabase
-    .from("profiles")
-    .select("*, departments(name)")
-    .order("created_at", { ascending: false });
+  const [users, departments] = await Promise.all([
+    supabase.from("profiles").select("*, departments(name)").order("created_at", { ascending: false }),
+    supabase.from("departments").select("id, name").eq("is_active", true).order("name"),
+  ]);
 
-  const { data: departments } = await supabase.from("departments").select("id, name").eq("is_active", true);
-
-  return (
-    <UsersClient
-      initialUsers={users || []}
-      departments={departments || []}
-      currentRole={profile.role}
-    />
-  );
+  return <UsersClient initialUsers={users.data ?? []} departments={departments.data ?? []} currentRole={profile.role} />;
 }

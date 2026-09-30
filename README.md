@@ -28,6 +28,16 @@ SUPABASE_SERVICE_ROLE_KEY=<service role key from Supabase dashboard — server o
 Get the service role key from: Supabase Dashboard → Project Settings → API → `service_role` secret.
 **Never** put it in a `NEXT_PUBLIC_*` variable or client code — it bypasses RLS.
 
+## 3b. Entry Lock (one-time database setup)
+Run `supabase/migrations/001_entry_lock.sql` **once** in Supabase Dashboard → SQL Editor → New query → Run.
+It is safe to re-run. Until it is run, the app works with no date limits and the Super Admin sees a reminder.
+
+**How the Entry Lock works**
+- Super Admin → **Entry Lock** page: turn the date lock ON/OFF, set the default days for departments and for admins, and override any single department or admin (Default / Custom days / No limit).
+- `N days` means entries whose week ended within the last N days can be opened. `0` = current week only, `7` = current + previous week.
+- Entries older than the limit are locked: they are hidden from the week list, blocked from opening, hidden from the admin's reports, and the database itself rejects edits (trigger on `inventory_entries`).
+- Super Admin always has no limit and can open every date.
+
 ## 4. Local Development
 ```
 npm install
@@ -45,6 +55,12 @@ All passwords: `SkKitchen@123`
 | Department User (Sikanderpur) | sikanderpur@skkitchen.test |
 
 Change these passwords before going to production.
+
+## 5b. Performance notes
+- Auth is verified locally from the JWT (`getClaims`) instead of a Supabase Auth call on every request; the profile is fetched once per request and shared by layout and page.
+- Pages fetch their data in parallel; Inventory saves only the changed rows in a single request; Items bulk upload and Mapping use batched queries.
+- `xlsx` and `jspdf` load only when an export/upload button is used. `loading.tsx` shows a skeleton instantly while a page loads.
+- **Biggest win on Vercel:** set the project's *Function Region* (Settings → Functions) to the same region as your Supabase project (for India, e.g. Mumbai `bom1` if Supabase is `ap-south-1`).
 
 ## 6. Deploy to Vercel
 1. Push this folder to a new GitHub repository.
@@ -71,5 +87,8 @@ Change these passwords before going to production.
 - [ ] Users: Admin can create a department user only; Super Admin can create any role
 - [ ] Users: reset password and activate/deactivate work
 - [ ] Reports: filter by department/category/status/date range; export Excel, CSV, PDF
+- [ ] Entry Lock: run the SQL migration, open Entry Lock as Super Admin, set a department to 7 days and save
+- [ ] Entry Lock: department user sees only weeks inside the limit; older week URL shows "This entry is locked"
+- [ ] Entry Lock: Super Admin can open any old week; setting a department/admin to "No limit" removes the limit
 - [ ] Trail: every action above appears with correct date/time/user/role/department
 - [ ] RLS: confirm via Supabase SQL editor that a department_user's session cannot select another department's rows

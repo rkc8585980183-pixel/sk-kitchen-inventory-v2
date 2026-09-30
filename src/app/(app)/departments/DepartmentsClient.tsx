@@ -1,113 +1,116 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { Department } from "@/types";
+import Modal from "@/components/Modal";
+import { useToast } from "@/components/Toast";
+import { Badge, Button, buttonCls, Card, EmptyState, Field, inputCls, PageHeader, td, th } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 export default function DepartmentsClient({ initialDepartments }: { initialDepartments: Department[] }) {
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
+  const { toast } = useToast();
   const [editing, setEditing] = useState<Partial<Department> | null>(null);
+  const [saving, setSaving] = useState(false);
 
   async function save() {
-    if (!editing?.name || !editing.code) {
-      alert("Code and Name are required.");
+    if (!editing?.name?.trim() || !editing.code?.trim()) {
+      toast("Code and name are required.", "error");
       return;
     }
-    const payload = { code: editing.code.toUpperCase(), name: editing.name };
+    setSaving(true);
+    const payload = { code: editing.code.trim().toUpperCase(), name: editing.name.trim() };
     const { error } = editing.id
       ? await supabase.from("departments").update(payload).eq("id", editing.id)
       : await supabase.from("departments").insert(payload);
-    if (error) {
-      alert(error.message);
-      return;
-    }
+    setSaving(false);
+    if (error) return toast(error.message, "error");
+    toast(editing.id ? "Department updated." : "Department added.");
     setEditing(null);
     router.refresh();
   }
 
   async function toggleActive(d: Department) {
-    await supabase.from("departments").update({ is_active: !d.is_active }).eq("id", d.id);
+    const { error } = await supabase.from("departments").update({ is_active: !d.is_active }).eq("id", d.id);
+    if (error) return toast(error.message, "error");
+    toast(d.is_active ? "Department deactivated." : "Department activated.");
     router.refresh();
   }
 
+  const limitLabel = (d: Department) =>
+    d.back_days == null ? <Badge>Default</Badge> : d.back_days === -1 ? <Badge tone="green">No limit</Badge> : <Badge tone="orange">{d.back_days} days</Badge>;
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Departments</h1>
-          <p className="text-sm text-gray-500">{initialDepartments.length} departments</p>
-        </div>
-        <button
-          onClick={() => setEditing({ code: "", name: "" })}
-          className="px-3 py-2 text-sm rounded-lg bg-orange-500 text-white hover:bg-orange-600"
-        >
-          + Add Department
-        </button>
-      </div>
+    <div>
+      <PageHeader
+        title="Departments"
+        subtitle={`${initialDepartments.length} departments`}
+        actions={
+          <>
+            <Link href="/entry-lock" className={buttonCls("secondary")}>Entry lock limits</Link>
+            <Button variant="primary" icon="plus" onClick={() => setEditing({ code: "", name: "" })}>Add department</Button>
+          </>
+        }
+      />
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500 border-b border-gray-100">
-              <th className="px-4 py-2 font-medium">Code</th>
-              <th className="px-4 py-2 font-medium">Name</th>
-              <th className="px-4 py-2 font-medium">Status</th>
-              <th className="px-4 py-2 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {initialDepartments.map((d) => (
-              <tr key={d.id} className="border-b border-gray-50 last:border-0">
-                <td className="px-4 py-2 text-gray-500">{d.code}</td>
-                <td className="px-4 py-2 text-gray-900">{d.name}</td>
-                <td className="px-4 py-2">
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${d.is_active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                    {d.is_active ? "Active" : "Inactive"}
-                  </span>
-                </td>
-                <td className="px-4 py-2 space-x-2">
-                  <button onClick={() => setEditing(d)} className="text-orange-600 text-xs font-medium">
-                    Edit
-                  </button>
-                  <button onClick={() => toggleActive(d)} className="text-gray-500 text-xs font-medium">
-                    {d.is_active ? "Deactivate" : "Activate"}
-                  </button>
-                </td>
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px]">
+            <thead className="bg-slate-50/70">
+              <tr>
+                <th className={th}>Code</th>
+                <th className={th}>Name</th>
+                <th className={th}>Entry limit</th>
+                <th className={th}>Status</th>
+                <th className={cn(th, "text-right")}>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {editing && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-6 w-full max-w-sm space-y-3">
-            <h2 className="font-semibold text-gray-900">{editing.id ? "Edit Department" : "Add Department"}</h2>
-            <input
-              placeholder="Code (e.g. JNK)"
-              value={editing.code || ""}
-              onChange={(e) => setEditing({ ...editing, code: e.target.value })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            />
-            <input
-              placeholder="Name"
-              value={editing.name || ""}
-              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-            />
-            <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => setEditing(null)} className="px-4 py-2 text-sm rounded-lg border border-gray-300">
-                Cancel
-              </button>
-              <button onClick={save} className="px-4 py-2 text-sm rounded-lg bg-orange-500 text-white">
-                Save
-              </button>
-            </div>
-          </div>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {initialDepartments.map((d) => (
+                <tr key={d.id} className="hover:bg-slate-50/60">
+                  <td className={cn(td, "font-mono text-xs")}>{d.code}</td>
+                  <td className={cn(td, "font-medium text-slate-900")}>{d.name}</td>
+                  <td className={td}>{limitLabel(d)}</td>
+                  <td className={td}><Badge tone={d.is_active ? "green" : "slate"} dot>{d.is_active ? "Active" : "Inactive"}</Badge></td>
+                  <td className={cn(td, "space-x-1 text-right whitespace-nowrap")}>
+                    <Button size="sm" variant="ghost" icon="pencil" onClick={() => setEditing(d)}>Edit</Button>
+                    <Button size="sm" variant="ghost" onClick={() => toggleActive(d)}>{d.is_active ? "Deactivate" : "Activate"}</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {initialDepartments.length === 0 && <EmptyState icon="departments" title="No departments yet" />}
         </div>
-      )}
+      </Card>
+
+      <Modal
+        open={!!editing}
+        onClose={() => setEditing(null)}
+        title={editing?.id ? "Edit department" : "Add department"}
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setEditing(null)}>Cancel</Button>
+            <Button variant="primary" loading={saving} onClick={save}>Save</Button>
+          </>
+        }
+      >
+        {editing && (
+          <>
+            <Field label="Code">
+              <input value={editing.code || ""} onChange={(e) => setEditing({ ...editing, code: e.target.value })} className={inputCls} placeholder="e.g. JNK" />
+            </Field>
+            <Field label="Name">
+              <input value={editing.name || ""} onChange={(e) => setEditing({ ...editing, name: e.target.value })} className={inputCls} />
+            </Field>
+          </>
+        )}
+      </Modal>
     </div>
   );
 }

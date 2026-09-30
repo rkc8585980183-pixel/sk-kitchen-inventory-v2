@@ -1,17 +1,12 @@
 import { getCurrentProfile } from "@/lib/auth";
-import Sidebar from "@/components/Sidebar";
+import AppShell from "@/components/AppShell";
+import { ToastProvider } from "@/components/Toast";
 
-export default async function AppLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const profile = await getCurrentProfile();
-
   return (
-    <div className="flex min-h-screen bg-gray-50">
-      <Sidebar profile={profile} />
-      <main className="flex-1 p-6 max-w-7xl mx-auto w-full">{children}</main>
-    </div>
+    <ToastProvider>
+      <AppShell profile={profile}>{children}</AppShell>
+    </ToastProvider>
   );
 }

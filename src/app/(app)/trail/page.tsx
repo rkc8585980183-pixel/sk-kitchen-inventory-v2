@@ -1,4 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
+import { fmtDateTime, roleLabel } from "@/lib/utils";
+import { Badge, Card, EmptyState, PageHeader, td, th } from "@/components/ui";
+
+export const metadata = { title: "Audit Trail" };
+
+const tone = (a: string) =>
+  /unlock/.test(a) ? "amber" : /submit/.test(a) ? "green" : /delete|deactivat/.test(a) ? "red" : /create|add/.test(a) ? "blue" : "slate";
 
 export default async function TrailPage() {
   const supabase = await createClient();
@@ -9,44 +16,40 @@ export default async function TrailPage() {
     .limit(200);
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold text-gray-900">Trail / Audit Log</h1>
-        <p className="text-sm text-gray-500">Last 200 activities</p>
-      </div>
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500 border-b border-gray-100">
-              <th className="px-4 py-2 font-medium">Date</th>
-              <th className="px-4 py-2 font-medium">Time</th>
-              <th className="px-4 py-2 font-medium">User</th>
-              <th className="px-4 py-2 font-medium">Role</th>
-              <th className="px-4 py-2 font-medium">Department</th>
-              <th className="px-4 py-2 font-medium">Action</th>
-              <th className="px-4 py-2 font-medium">Description</th>
-              <th className="px-4 py-2 font-medium">Record ID</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(logs || []).map((l) => {
-              const dt = new Date(l.created_at);
-              return (
-                <tr key={l.id} className="border-b border-gray-50 last:border-0">
-                  <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{dt.toLocaleDateString()}</td>
-                  <td className="px-4 py-2 text-gray-500 whitespace-nowrap">{dt.toLocaleTimeString()}</td>
-                  <td className="px-4 py-2 text-gray-900">{l.username}</td>
-                  <td className="px-4 py-2 text-gray-500 capitalize">{l.role?.replace("_", " ") || "-"}</td>
-                  <td className="px-4 py-2 text-gray-500">{l.department_name || "-"}</td>
-                  <td className="px-4 py-2 text-gray-700">{l.action.replace(/_/g, " ")}</td>
-                  <td className="px-4 py-2 text-gray-500">{l.description || "-"}</td>
-                  <td className="px-4 py-2 text-gray-400">{l.record_id || "-"}</td>
+    <div>
+      <PageHeader title="Audit trail" subtitle="Last 200 activities · times shown in IST" />
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px]">
+            <thead className="bg-slate-50/70">
+              <tr>
+                <th className={th}>When</th>
+                <th className={th}>User</th>
+                <th className={th}>Department</th>
+                <th className={th}>Action</th>
+                <th className={th}>Description</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {(logs ?? []).map((l) => (
+                <tr key={l.id} className="align-top hover:bg-slate-50/60">
+                  <td className={`${td} whitespace-nowrap`}>{fmtDateTime(l.created_at)}</td>
+                  <td className={td}>
+                    <p className="font-medium text-slate-900">{l.username}</p>
+                    <p className="text-xs text-slate-500">{l.role ? roleLabel(l.role) : "—"}</p>
+                  </td>
+                  <td className={td}>{l.department_name || "—"}</td>
+                  <td className={td}>
+                    <Badge tone={tone(l.action)} className="capitalize">{String(l.action).replace(/_/g, " ")}</Badge>
+                  </td>
+                  <td className={td}>{l.description || "—"}</td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              ))}
+            </tbody>
+          </table>
+          {(logs ?? []).length === 0 && <EmptyState icon="trail" title="No activity yet" />}
+        </div>
+      </Card>
     </div>
   );
 }
