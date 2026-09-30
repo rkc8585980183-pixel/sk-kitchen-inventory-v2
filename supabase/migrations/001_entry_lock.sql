@@ -36,6 +36,22 @@ alter table public.departments add column if not exists back_days int
 alter table public.profiles add column if not exists back_days int
   check (back_days is null or back_days >= -1);
 
+-- 2b. Entries are per DATE now: remove the old "a period must be 7 days" rules
+--     (e.g. week_is_7_days) and keep only "end date is not before start date".
+do $$
+declare c record;
+begin
+  for c in
+    select conname from pg_constraint
+    where conrelid = 'public.inventory_periods'::regclass
+      and contype = 'c'
+      and (pg_get_constraintdef(oid) ilike '%week_start%' or pg_get_constraintdef(oid) ilike '%week_end%')
+  loop
+    execute format('alter table public.inventory_periods drop constraint %I', c.conname);
+  end loop;
+end $$;
+alter table public.inventory_periods add constraint week_dates_ordered check (week_end >= week_start);
+
 -- 3. Resolve the window for a user. NULL result = no limit.
 create or replace function public.entry_window_days(p_user uuid)
 returns int
