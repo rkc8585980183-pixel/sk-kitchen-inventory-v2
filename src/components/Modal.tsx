@@ -19,22 +19,28 @@ export default function Modal({
   footer?: ReactNode;
   size?: "sm" | "md" | "lg";
 }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Keep the latest onClose in a ref so the effect below runs only when the modal
+  // opens/closes (NOT on every keystroke, which used to steal focus from the input).
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCloseRef.current();
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    // focus first field
-    const t = setTimeout(() => ref.current?.querySelector<HTMLElement>("input,select,textarea,button")?.focus(), 30);
+    // focus the first form field in the body (not the close button)
+    const t = setTimeout(() => bodyRef.current?.querySelector<HTMLElement>("input:not(:disabled),select,textarea")?.focus(), 30);
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prev;
       clearTimeout(t);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -42,7 +48,6 @@ export default function Modal({
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={title}>
       <div className="absolute inset-0 animate-fade-in bg-slate-900/50 backdrop-blur-[2px]" onClick={onClose} />
       <div
-        ref={ref}
         className={cn(
           "relative flex max-h-[92vh] w-full animate-slide-up flex-col rounded-t-2xl bg-white shadow-pop sm:rounded-2xl",
           size === "sm" && "sm:max-w-sm",
@@ -56,7 +61,7 @@ export default function Modal({
             <Icon name="x" size={18} />
           </button>
         </div>
-        <div className="space-y-4 overflow-y-auto px-5 py-4">{children}</div>
+        <div ref={bodyRef} className="space-y-4 overflow-y-auto px-5 py-4">{children}</div>
         {footer && <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">{footer}</div>}
       </div>
     </div>
