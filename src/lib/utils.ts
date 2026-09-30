@@ -51,3 +51,19 @@ export function initials(name: string): string {
 export function roleLabel(role: string): string {
   return role === "super_admin" ? "Super Admin" : role === "admin" ? "Admin" : "Department User";
 }
+
+export function fmtWeekday(iso: string): string {
+  return new Date(iso + "T00:00:00Z").toLocaleDateString("en-GB", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+export function chipLabel(iso: string, today: string): string {
+  if (iso === today) return "Today";
+  if (iso === addDays(today, -1)) return "Yesterday";
+  return new Date(iso + "T00:00:00Z").toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", timeZone: "UTC" });
+}

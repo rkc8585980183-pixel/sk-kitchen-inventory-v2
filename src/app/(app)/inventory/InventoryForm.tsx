@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -8,9 +8,9 @@ import type { Item, PeriodLite } from "@/types";
 import Icon from "@/components/Icons";
 import Modal from "@/components/Modal";
 import { useToast } from "@/components/Toast";
-import { Badge, Button, Card, inputCls, Notice, ProgressBar, StatusBadge } from "@/components/ui";
+import { Badge, Button, Card, inputCls, Notice, ProgressBar, selectCls, Spinner, StatusBadge } from "@/components/ui";
 
-/* One row. memo(): typing in one row does not re-render the other few hundred. */
+/* One table row. memo(): typing in one row does not re-render the other few hundred. */
 const ItemRow = memo(function ItemRow({
   item,
   value,
@@ -25,40 +25,47 @@ const ItemRow = memo(function ItemRow({
   onChange: (id: string, v: string) => void;
 }) {
   return (
-    <li className="flex items-center gap-3 px-4 py-2.5 sm:px-5">
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-slate-900">{item.item_name}</p>
-        <p className="truncate text-xs text-slate-500">
+    <tr className="hover:bg-slate-50/60">
+      <td className="hidden px-4 py-2.5 font-mono text-xs text-slate-500 md:table-cell">{item.item_code}</td>
+      <td className="px-4 py-2.5">
+        <p className="text-sm font-medium text-slate-900">{item.item_name}</p>
+        <p className="text-xs text-slate-500 md:hidden">
           {item.item_code}
           {item.category ? ` · ${item.category}` : ""}
         </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <input
-          data-qty
-          type="number"
-          inputMode="decimal"
-          min={0}
-          step="any"
-          disabled={disabled}
-          value={value}
-          placeholder="0"
-          aria-label={`Quantity for ${item.item_name}`}
-          onWheel={(e) => e.currentTarget.blur()}
-          onChange={(e) => onChange(item.id, e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key !== "Enter") return;
-            e.preventDefault();
-            const all = Array.from(document.querySelectorAll<HTMLInputElement>("input[data-qty]:not(:disabled)"));
-            all[all.indexOf(e.currentTarget) + 1]?.focus();
-          }}
-          className={cn(inputCls, "h-10 w-24 text-right tabular-nums sm:w-28", dirty && "border-orange-400 bg-orange-50/40")}
-        />
-        <span className="w-9 text-xs font-medium uppercase text-slate-500">{item.unit}</span>
-      </div>
-    </li>
+      </td>
+      <td className="hidden px-4 py-2.5 text-sm text-slate-600 md:table-cell">{item.category || "—"}</td>
+      <td className="hidden px-4 py-2.5 text-sm uppercase text-slate-500 md:table-cell">{item.unit}</td>
+      <td className="px-4 py-2.5">
+        <div className="flex items-center justify-end gap-2">
+          <input
+            data-qty
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="any"
+            disabled={disabled}
+            value={value}
+            placeholder="0"
+            aria-label={`Quantity for ${item.item_name}`}
+            onWheel={(e) => e.currentTarget.blur()}
+            onChange={(e) => onChange(item.id, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              const all = Array.from(document.querySelectorAll<HTMLInputElement>("input[data-qty]:not(:disabled)"));
+              all[all.indexOf(e.currentTarget) + 1]?.focus();
+            }}
+            className={cn(inputCls, "w-24 text-right tabular-nums sm:w-28", dirty && "border-orange-400 bg-orange-50/40")}
+          />
+          <span className="w-9 text-xs font-medium uppercase text-slate-500 md:hidden">{item.unit}</span>
+        </div>
+      </td>
+    </tr>
   );
 });
+
+const AUTOSAVE_MS = 1000;
 
 export default function InventoryForm({
   period,
@@ -83,20 +90,118 @@ export default function InventoryForm({
   );
   const [quantities, setQuantities] = useState<Record<string, string>>(initial);
   const [saved, setSaved] = useState<Record<string, string>>(initial);
+  const [status, setStatus] = useState<"idle" | "saving" | "error">("idle");
+  const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
-  const [saving, setSaving] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [reason, setReason] = useState("");
 
-  const onChange = useCallback((id: string, v: string) => setQuantities((q) => ({ ...q, [id]: v })), []);
+  // Refs so the autosave timer always sees the latest values.
+  const qRef = useRef(quantities);
+  const sRef = useRef(saved);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const running = useRef<Promise<boolean> | null>(null);
+  useEffect(() => {
+    qRef.current = quantities;
+    sRef.current = saved;
+  });
 
-  const categories = useMemo(() => {
-    const counts = new Map<string, number>();
-    items.forEach((i) => counts.set(i.category || "Uncategorized", (counts.get(i.category || "Uncategorized") ?? 0) + 1));
-    return Array.from(counts.entries());
-  }, [items]);
+  const itemIds = useMemo(() => items.map((i) => i.id), [items]);
+
+  function friendly(msg: string) {
+    return msg.includes("ENTRY_LOCKED") ? "This date is locked. Contact the Super Admin." : msg;
+  }
+
+  /** Saves every changed row in ONE request. Returns true when nothing is left unsaved. */
+  const flush = useCallback(async (): Promise<boolean> => {
+    if (!canEdit) return true;
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (running.current) await running.current;
+
+    const q = qRef.current;
+    const s = sRef.current;
+    const ids = itemIds.filter((id) => (q[id] ?? "") !== "" && q[id] !== (s[id] ?? ""));
+    if (!ids.length) return true;
+
+    const rows = ids.map((item_id) => ({ period_id: period.id, item_id, quantity: parseFloat(q[item_id]) }));
+    if (rows.some((r) => !Number.isFinite(r.quantity) || r.quantity < 0)) {
+      setStatus("error");
+      toast("Quantities must be numbers (0 or more).", "error");
+      return false;
+    }
+
+    setStatus("saving");
+    const job = (async () => {
+      const { error } = await supabase.from("inventory_entries").upsert(rows, { onConflict: "period_id,item_id" });
+      if (error) {
+        setStatus("error");
+        toast(friendly(error.message), "error");
+        return false;
+      }
+      const patch = Object.fromEntries(ids.map((id) => [id, q[id]]));
+      sRef.current = { ...sRef.current, ...patch };
+      setSaved((prev) => ({ ...prev, ...patch }));
+      setSavedAt(new Date());
+      setStatus("idle");
+      return true;
+    })();
+    running.current = job;
+    const ok = await job;
+    running.current = null;
+    return ok;
+  }, [canEdit, itemIds, period.id, supabase, toast]);
+
+  const flushRef = useRef(flush);
+  useEffect(() => {
+    flushRef.current = flush;
+  });
+
+  const onChange = useCallback((id: string, v: string) => {
+    setQuantities((q) => ({ ...q, [id]: v }));
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      flushRef.current();
+    }, AUTOSAVE_MS);
+  }, []);
+
+  // Leaving the page / switching tab / closing: save what is pending (the entry stays a draft).
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flushRef.current();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onHide);
+      flushRef.current();
+    };
+  }, []);
+
+  const dirtyIds = useMemo(
+    () => itemIds.filter((id) => (quantities[id] ?? "") !== "" && quantities[id] !== (saved[id] ?? "")),
+    [itemIds, quantities, saved]
+  );
+  const dirtySet = useMemo(() => new Set(dirtyIds), [dirtyIds]);
+  const entered = useMemo(() => itemIds.filter((id) => (quantities[id] ?? "") !== "").length, [itemIds, quantities]);
+
+  useEffect(() => {
+    if (!dirtyIds.length) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirtyIds.length]);
+
+  const categories = useMemo(
+    () => Array.from(new Set(items.map((i) => i.category || "Uncategorized"))).sort((a, b) => a.localeCompare(b)),
+    [items]
+  );
 
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
@@ -107,54 +212,15 @@ export default function InventoryForm({
     );
   }, [items, search, category]);
 
-  // Only rows that actually changed are sent to the database.
-  const dirtyIds = useMemo(
-    () => items.filter((i) => (quantities[i.id] ?? "") !== "" && quantities[i.id] !== (saved[i.id] ?? "")).map((i) => i.id),
-    [items, quantities, saved]
-  );
-  const dirtySet = useMemo(() => new Set(dirtyIds), [dirtyIds]);
-  const entered = useMemo(() => items.filter((i) => (quantities[i.id] ?? "") !== "").length, [items, quantities]);
-
-  useEffect(() => {
-    if (!dirtyIds.length) return;
-    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirtyIds.length]);
-
-  function friendly(msg: string) {
-    return msg.includes("ENTRY_LOCKED") ? "This entry is locked (older than your allowed days). Contact Super Admin." : msg;
-  }
-
-  async function save(): Promise<boolean> {
-    if (!dirtyIds.length) return true;
-    const rows = dirtyIds.map((item_id) => ({ period_id: period.id, item_id, quantity: parseFloat(quantities[item_id]) }));
-    if (rows.some((r) => Number.isNaN(r.quantity) || r.quantity < 0)) {
-      toast("Quantities must be valid numbers (0 or more).", "error");
-      return false;
-    }
-    setSaving(true);
-    // ONE request for all changed rows (was: one request per row).
-    const { error } = await supabase.from("inventory_entries").upsert(rows, { onConflict: "period_id,item_id" });
-    setSaving(false);
-    if (error) {
-      toast(friendly(error.message), "error");
-      return false;
-    }
-    setSaved((s) => ({ ...s, ...Object.fromEntries(dirtyIds.map((id) => [id, quantities[id]])) }));
-    return true;
-  }
-
-  async function handleSave() {
-    if (await save()) toast("Draft saved.");
-  }
-
   async function handleSubmit() {
     setConfirmSubmit(false);
-    if (!(await save())) return;
-    setSaving(true);
+    setSubmitting(true);
+    if (!(await flush())) {
+      setSubmitting(false);
+      return;
+    }
     const { error } = await supabase.rpc("submit_inventory", { p_period_id: period.id });
-    setSaving(false);
+    setSubmitting(false);
     if (error) {
       toast(friendly(`Submit failed: ${error.message}`), "error");
       return;
@@ -164,9 +230,9 @@ export default function InventoryForm({
   }
 
   async function handleUnlock() {
-    setSaving(true);
+    setSubmitting(true);
     const { error } = await supabase.rpc("unlock_inventory", { p_period_id: period.id, p_reason: reason.trim() });
-    setSaving(false);
+    setSubmitting(false);
     if (error) {
       toast(friendly(`Unlock failed: ${error.message}`), "error");
       return;
@@ -177,12 +243,14 @@ export default function InventoryForm({
     router.refresh();
   }
 
+  const time = savedAt?.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
+
   return (
     <>
       {period.status === "submitted" && (
         <Notice tone="success" icon="lock">
-          This inventory is <b>submitted and locked</b>.{" "}
-          {canUnlock ? "You can unlock it for editing." : "Contact your Admin to unlock it."}
+          This entry is <b>submitted and locked</b>.{" "}
+          {canUnlock ? "You can unlock it for editing." : "It cannot be edited again. Contact your Admin if a correction is needed."}
         </Notice>
       )}
       {period.status === "unlocked" && (
@@ -191,7 +259,7 @@ export default function InventoryForm({
         </Notice>
       )}
 
-      <Card className="mt-5 overflow-hidden">
+      <Card className="overflow-hidden">
         {/* toolbar */}
         <div className="space-y-4 border-b border-slate-100 p-4 sm:p-5">
           <div className="flex flex-wrap items-center gap-3">
@@ -205,9 +273,16 @@ export default function InventoryForm({
                 aria-label="Search items"
               />
             </div>
-            <div className="ml-auto flex items-center gap-3">
+            <select value={category} onChange={(e) => setCategory(e.target.value)} className={cn(selectCls, "w-full sm:w-52")} aria-label="Filter by category">
+              <option value="all">All categories</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <div className="ml-auto">
               <StatusBadge status={period.status} />
-              {dirtyIds.length > 0 && <Badge tone="orange" dot>{dirtyIds.length} unsaved</Badge>}
             </div>
           </div>
 
@@ -219,54 +294,58 @@ export default function InventoryForm({
               {entered}/{items.length} entered
             </span>
           </div>
+        </div>
 
-          {categories.length > 1 && (
-            <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 sm:mx-0 sm:px-0">
-              {[["all", items.length] as const, ...categories].map(([c, n]) => (
-                <button
-                  key={c}
-                  onClick={() => setCategory(c)}
-                  className={cn(
-                    "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition",
-                    category === c
-                      ? "border-slate-900 bg-slate-900 text-white"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
-                  )}
-                >
-                  {c === "all" ? "All" : c} <span className={category === c ? "text-slate-300" : "text-slate-400"}>{n}</span>
-                </button>
+        {/* items table */}
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="hidden bg-slate-50/70 md:table-header-group">
+              <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                <th className="px-4 py-3">Code</th>
+                <th className="px-4 py-3">Item</th>
+                <th className="px-4 py-3">Category</th>
+                <th className="px-4 py-3">Unit</th>
+                <th className="px-4 py-3 text-right">Quantity</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.map((i) => (
+                <ItemRow key={i.id} item={i} value={quantities[i.id] ?? ""} disabled={!canEdit} dirty={dirtySet.has(i.id)} onChange={onChange} />
               ))}
-            </div>
+            </tbody>
+          </table>
+          {filtered.length === 0 && (
+            <p className="px-5 py-12 text-center text-sm text-slate-400">
+              {items.length === 0 ? "No items are mapped to this department yet." : "No items match your search."}
+            </p>
           )}
         </div>
 
-        {/* items */}
-        <ul className="divide-y divide-slate-100">
-          {filtered.map((i) => (
-            <ItemRow key={i.id} item={i} value={quantities[i.id] ?? ""} disabled={!canEdit} dirty={dirtySet.has(i.id)} onChange={onChange} />
-          ))}
-          {filtered.length === 0 && (
-            <li className="px-5 py-12 text-center text-sm text-slate-400">
-              {items.length === 0 ? "No items are mapped to this department yet." : "No items match your search."}
-            </li>
-          )}
-        </ul>
-
         {/* sticky action bar */}
         <div className="sticky bottom-0 z-10 flex items-center gap-3 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-5">
-          <p className="hidden text-xs text-slate-500 sm:block">
-            {canEdit ? "Tip: press Enter to jump to the next item." : "Read only."}
-          </p>
+          <div className="min-w-0 text-xs text-slate-500">
+            {!canEdit ? (
+              "Read only"
+            ) : status === "saving" ? (
+              <span className="flex items-center gap-2"><Spinner className="h-3.5 w-3.5 text-orange-500" /> Saving…</span>
+            ) : status === "error" ? (
+              <span className="flex items-center gap-2 text-red-600">
+                Not saved
+                <button onClick={() => flush()} className="font-medium underline">Retry</button>
+              </span>
+            ) : dirtyIds.length > 0 ? (
+              <Badge tone="orange" dot>Saving soon…</Badge>
+            ) : time ? (
+              <span className="flex items-center gap-1.5 text-emerald-700"><Icon name="check" size={14} /> Draft saved {time}</span>
+            ) : (
+              "Auto-saved as a draft. It stays open until you submit."
+            )}
+          </div>
           <div className="ml-auto flex gap-2">
             {canEdit ? (
-              <>
-                <Button onClick={handleSave} loading={saving} disabled={!dirtyIds.length}>
-                  Save draft
-                </Button>
-                <Button variant="primary" icon="check" onClick={() => setConfirmSubmit(true)} disabled={saving || items.length === 0}>
-                  Submit
-                </Button>
-              </>
+              <Button variant="primary" icon="check" loading={submitting} disabled={status === "saving" || items.length === 0} onClick={() => setConfirmSubmit(true)}>
+                Submit
+              </Button>
             ) : canUnlock ? (
               <Button variant="warning" icon="unlock" onClick={() => setUnlocking(true)}>
                 Unlock for editing
@@ -279,7 +358,7 @@ export default function InventoryForm({
       <Modal
         open={confirmSubmit}
         onClose={() => setConfirmSubmit(false)}
-        title="Submit this week's inventory?"
+        title="Submit this entry?"
         size="sm"
         footer={
           <>
@@ -292,7 +371,8 @@ export default function InventoryForm({
       >
         <p className="text-sm text-slate-600">
           {entered} of {items.length} items have a quantity.
-          {entered < items.length && <> The remaining <b>{items.length - entered}</b> are still empty.</>} After submitting, the entry is locked until an Admin unlocks it.
+          {entered < items.length && <> The remaining <b>{items.length - entered}</b> are still empty.</>} After you submit, this entry is
+          locked and cannot be edited again.
         </p>
       </Modal>
 
@@ -304,7 +384,7 @@ export default function InventoryForm({
         footer={
           <>
             <Button onClick={() => setUnlocking(false)}>Cancel</Button>
-            <Button variant="warning" loading={saving} onClick={handleUnlock}>
+            <Button variant="warning" loading={submitting} onClick={handleUnlock}>
               Unlock
             </Button>
           </>

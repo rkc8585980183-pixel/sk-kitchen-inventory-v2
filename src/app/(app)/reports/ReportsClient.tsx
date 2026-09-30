@@ -58,7 +58,10 @@ export default function ReportsClient({
     () =>
       filtered.map((r) => ({
         Department: r.inventory_periods?.departments?.name || "-",
-        Week: `${r.inventory_periods?.week_start} - ${r.inventory_periods?.week_end}`,
+        Date:
+          r.inventory_periods?.week_start === r.inventory_periods?.week_end
+            ? r.inventory_periods?.week_start
+            : `${r.inventory_periods?.week_start} - ${r.inventory_periods?.week_end}`,
         "Item Code": r.items?.item_code ?? "",
         "Item Name": r.items?.item_name ?? "",
         Category: r.items?.category || "-",
@@ -159,13 +162,13 @@ export default function ReportsClient({
         <div className="overflow-x-auto">
           <table className="w-full min-w-[860px]">
             <thead className="bg-slate-50/70">
-              <tr>{["Department", "Week", "Item Code", "Item Name", "Category", "Unit", "Quantity", "Status", "Inv Code"].map((h) => <th key={h} className={cn(th, h === "Quantity" && "text-right")}>{h}</th>)}</tr>
+              <tr>{["Department", "Date", "Item Code", "Item Name", "Category", "Unit", "Quantity", "Status", "Inv Code"].map((h) => <th key={h} className={cn(th, h === "Quantity" && "text-right")}>{h}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {tableRows.slice(0, shown).map((r, i) => (
                 <tr key={i} className="hover:bg-slate-50/60">
                   <td className={cn(td, "font-medium text-slate-900 whitespace-nowrap")}>{r.Department}</td>
-                  <td className={cn(td, "whitespace-nowrap text-xs")}>{r.Week}</td>
+                  <td className={cn(td, "whitespace-nowrap text-xs")}>{r.Date}</td>
                   <td className={cn(td, "font-mono text-xs")}>{r["Item Code"]}</td>
                   <td className={td}>{r["Item Name"]}</td>
                   <td className={td}>{r.Category}</td>

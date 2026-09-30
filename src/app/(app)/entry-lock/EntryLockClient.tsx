@@ -32,7 +32,7 @@ function LimitRow({
   onChange: (l: Limit) => void;
 }) {
   const days = limit.mode === "default" ? defaultDays : limit.mode === "custom" ? limit.days : null;
-  const preview = !enabled || days === null ? "Any date" : `From ${fmtDay(addDays(today, -days), true)}`;
+  const preview = !enabled || days === null ? "Any date" : days === 0 ? "Fully locked" : `From ${fmtDay(addDays(today, -(days - 1)), true)}`;
 
   return (
     <li className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:px-5">
@@ -148,7 +148,7 @@ export default function EntryLockClient({
     <div className="pb-24">
       <PageHeader
         title="Entry lock"
-        subtitle="Control how many days back each department and admin can open or edit inventory entries."
+        subtitle="Set how many days of entries each department and admin can open and edit. Older dates are locked."
       />
 
       {!ready && (
@@ -168,7 +168,7 @@ export default function EntryLockClient({
             <div>
               <h2 className="font-semibold text-slate-900">Date lock</h2>
               <p className="mt-1 text-sm text-slate-500">
-                When ON, entries older than the allowed days are locked. Only the Super Admin can open them.
+                When ON, dates older than the allowed days are locked. Only the Super Admin can open them.
               </p>
             </div>
             <button
@@ -191,13 +191,13 @@ export default function EntryLockClient({
                 <span className="mb-1.5 block text-xs font-medium text-slate-600">{label}</span>
                 <div className="relative">
                   <input type="number" min={0} max={3650} value={value} onChange={(e) => set(clampDays(parseInt(e.target.value, 10)))} className={cn(inputCls, "pr-14 tabular-nums")} />
-                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">days back</span>
+                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">days</span>
                 </div>
               </label>
             ))}
           </div>
           <p className="mt-4 text-xs text-slate-500">
-            <b>0</b> = current week only · <b>7</b> = current + previous week · <b>30</b> = about a month. Below, you can override any department or admin.
+            Days include today: <b>1</b> = today only · <b>2</b> = today + yesterday · <b>7</b> = last 7 days · <b>0</b> = fully locked. Below, you can override any department or admin.
           </p>
         </Card>
 

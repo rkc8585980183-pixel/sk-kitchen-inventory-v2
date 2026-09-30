@@ -29,13 +29,14 @@ Get the service role key from: Supabase Dashboard → Project Settings → API �
 **Never** put it in a `NEXT_PUBLIC_*` variable or client code — it bypasses RLS.
 
 ## 3b. Entry Lock (one-time database setup)
-Run `supabase/migrations/001_entry_lock.sql` **once** in Supabase Dashboard → SQL Editor → New query → Run.
+Run `supabase/migrations/001_entry_lock.sql` in Supabase Dashboard → SQL Editor → New query → Run.
 It is safe to re-run. Until it is run, the app works with no date limits and the Super Admin sees a reminder.
 
 **How the Entry Lock works**
 - Super Admin → **Entry Lock** page: turn the date lock ON/OFF, set the default days for departments and for admins, and override any single department or admin (Default / Custom days / No limit).
-- `N days` means entries whose week ended within the last N days can be opened. `0` = current week only, `7` = current + previous week.
-- Entries older than the limit are locked: they are hidden from the week list, blocked from opening, hidden from the admin's reports, and the database itself rejects edits (trigger on `inventory_entries`).
+- Entries are **per date**. `N days` means the last N days (today included) are open: `1` = today only, `2` = today + yesterday, `7` = last 7 days, `0` = fully locked.
+- Dates older than the limit are locked: the date picker stops at the allowed date, the page shows "This date is locked", they are hidden from the admin's reports, and the database itself rejects edits (trigger on `inventory_entries`).
+- A department user's entry is **auto-saved as a draft** and stays open until they press Submit. After Submit it cannot be edited again (only an Admin can unlock it).
 - Super Admin always has no limit and can open every date.
 
 ## 4. Local Development

@@ -1,14 +1,16 @@
 -- =====================================================================
--- SK Kitchen Inventory - Entry Lock (date window) feature
--- Run this ONCE in: Supabase Dashboard -> SQL Editor -> New query -> Run
--- Safe to re-run.
+-- SK Kitchen Inventory - Daily entries + Entry Lock (date window)
+-- Run this in: Supabase Dashboard -> SQL Editor -> New query -> Run
+-- Safe to run again (it also UPDATES an older version of this file).
 -- =====================================================================
 -- Rules
+--   * One inventory entry per department per DATE.
 --   * Super Admin  : no limit, can open any date.
---   * Admin        : profiles.back_days (NULL = default_admin_days, -1 = no limit)
+--   * Admin        : profiles.back_days   (NULL = default_admin_days, -1 = no limit)
 --   * Dept user    : departments.back_days (NULL = default_department_days, -1 = no limit)
---   * back_days = N means: entries whose week ended within the last N days can be opened.
---       0 = only the current week, 7 = current + previous week, 30 = about a month.
+--   * back_days = N means the last N days are open, TODAY INCLUDED:
+--       0 = fully locked, 1 = today only, 2 = today + yesterday, 7 = last 7 days.
+--   * A draft is saved automatically and stays open until Submit is clicked.
 -- =====================================================================
 
 -- 1. Global settings (single row)
@@ -69,11 +71,63 @@ language sql stable security definer set search_path = public as $$
   select public.entry_window_days(auth.uid());
 $$;
 
+-- 5. Open (or create) the entry of one department for one date.
+create or replace function public.start_inventory_day(p_department_id uuid, p_date date)
+returns public.inventory_periods
+language plpgsql security definer set search_path = public as $$
+declare
+  v_uid   uuid := auth.uid();
+  v_role  text; v_dept uuid; v_days int; v_code text;
+  v_today date := (now() at time zone 'Asia/Kolkata')::date;
+  v_row   public.inventory_periods;
+begin
+  if v_uid is null then raise exception 'Not signed in'; end if;
+
+  select role, department_id into v_role, v_dept
+    from public.profiles where id = v_uid and is_active;
+  if not found then raise exception 'No active profile for this user'; end if;
+
+  if v_role = 'department_user' and v_dept is distinct from p_department_id then
+    raise exception 'You can only open your own department';
+  end if;
+
+  if p_date > v_today then
+    raise exception 'ENTRY_LOCKED: future dates cannot be opened.' using errcode = 'P0001';
+  end if;
+
+  v_days := public.entry_window_days(v_uid);
+  if v_days is not null and p_date < v_today - (v_days - 1) then
+    raise exception 'ENTRY_LOCKED: this date is locked. You can open the last % day(s) only.', v_days
+      using errcode = 'P0001';
+  end if;
+
+  select * into v_row from public.inventory_periods
+   where department_id = p_department_id and week_start = p_date and week_end = p_date;
+  if found then return v_row; end if;
+
+  select code into v_code from public.departments where id = p_department_id;
+
+  insert into public.inventory_periods (department_id, week_start, week_end, status, inv_code, resubmit_count)
+  values (p_department_id, p_date, p_date, 'pending',
+          'INV-' || coalesce(v_code, 'DEPT') || '-' || to_char(p_date, 'YYMMDD'), 0)
+  on conflict do nothing
+  returning * into v_row;
+
+  if v_row.id is null then                           -- created at the same moment by someone else
+    select * into v_row from public.inventory_periods
+     where department_id = p_department_id and week_start = p_date
+     order by (week_end = p_date) desc limit 1;
+  end if;
+  return v_row;
+end $$;
+
 revoke all on function public.entry_window_days(uuid) from public, anon, authenticated;
 revoke all on function public.my_entry_window() from public, anon;
+revoke all on function public.start_inventory_day(uuid, date) from public, anon;
 grant execute on function public.my_entry_window() to authenticated;
+grant execute on function public.start_inventory_day(uuid, date) to authenticated;
 
--- 5. Hard enforcement: block writes to entries older than the allowed window.
+-- 6. Hard enforcement: block writes to entries outside the allowed window.
 --    (Service role / SQL editor have no auth.uid(), so they are never blocked.)
 create or replace function public.enforce_entry_window()
 returns trigger
@@ -91,8 +145,8 @@ begin
   v_days := public.entry_window_days(auth.uid());
   if v_days is not null then
     select week_end into v_end from public.inventory_periods where id = v_period;
-    if v_end is not null and v_end < ((now() at time zone 'Asia/Kolkata')::date - v_days) then
-      raise exception 'ENTRY_LOCKED: entries older than % days are locked. Contact Super Admin.', v_days
+    if v_end is not null and v_end < ((now() at time zone 'Asia/Kolkata')::date - (v_days - 1)) then
+      raise exception 'ENTRY_LOCKED: this date is locked. You can edit the last % day(s) only.', v_days
         using errcode = 'P0001';
     end if;
   end if;

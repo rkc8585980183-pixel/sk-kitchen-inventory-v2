@@ -2,9 +2,9 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentProfile, isAdmin } from "@/lib/auth";
 import { getEntryPolicy } from "@/lib/lock";
-import { fmtDateTime, fmtRange, todayIST } from "@/lib/utils";
+import { fmtDateTime, fmtWeekday, todayIST } from "@/lib/utils";
 import Icon, { type IconName } from "@/components/Icons";
-import { Badge, buttonCls, Card, Notice, PageHeader, ProgressBar, StatusBadge } from "@/components/ui";
+import { buttonCls, Card, Notice, PageHeader, ProgressBar, StatusBadge } from "@/components/ui";
 
 export const metadata = { title: "Dashboard" };
 
@@ -15,17 +15,14 @@ export default async function DashboardPage() {
   const today = todayIST();
 
   // All independent queries run in parallel (was: one after another).
-  const [deptRes, periodRes, itemsRes, todayRes, policy] = await Promise.all([
+  const [deptRes, periodRes, itemsRes, policy] = await Promise.all([
     supabase.from("departments").select("id, name").eq("is_active", true).order("name"),
     supabase
       .from("inventory_periods")
-      .select("id, department_id, status, submitted_at, inv_code, week_start, week_end")
-      .lte("week_start", today)
-      .gte("week_end", today),
+      .select("id, department_id, status, submitted_at, inv_code")
+      .eq("week_start", today)
+      .eq("week_end", today),
     supabase.from("items").select("id", { count: "exact", head: true }).eq("is_active", true),
-    admin
-      ? supabase.from("inventory_periods").select("id", { count: "exact", head: true }).gte("submitted_at", `${today}T00:00:00+05:30`)
-      : Promise.resolve({ count: 0 }),
     getEntryPolicy(),
   ]);
 
@@ -34,8 +31,7 @@ export default async function DashboardPage() {
   const rows = departments.map((d) => ({ dept: d, period: periods.find((p) => p.department_id === d.id) }));
   const submitted = rows.filter((r) => r.period?.status === "submitted").length;
   const pending = rows.length - submitted;
-  const weekLabel = periods[0] ? fmtRange(periods[0].week_start, periods[0].week_end) : null;
-
+  
   const kpis: { label: string; value: number; icon: IconName; tone: string }[] = [
     { label: "Departments", value: departments.length, icon: "departments", tone: "bg-sky-50 text-sky-600" },
     { label: "Submitted", value: submitted, icon: "check", tone: "bg-emerald-50 text-emerald-600" },
@@ -47,7 +43,7 @@ export default async function DashboardPage() {
     <div className="space-y-6">
       <PageHeader
         title={`Hello, ${profile.full_name.split(" ")[0]}`}
-        subtitle={weekLabel ? `This week: ${weekLabel}` : "Here is how your kitchen is doing this week."}
+        subtitle={`Today: ${fmtWeekday(today)}`}
         actions={
           <Link href="/inventory" className={buttonCls("primary")}>
             <Icon name="inventory" size={16} /> Open inventory
@@ -80,9 +76,8 @@ export default async function DashboardPage() {
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
             <div>
               <h2 className="font-semibold text-slate-900">Department status</h2>
-              <p className="text-xs text-slate-500">{submitted} of {departments.length} submitted this week</p>
+              <p className="text-xs text-slate-500">{submitted} of {departments.length} submitted today</p>
             </div>
-            {admin && <Badge tone="orange">{todayRes.count ?? 0} submitted today</Badge>}
           </div>
           <div className="px-5 pt-4">
             <ProgressBar value={submitted} max={departments.length} tone="green" />
@@ -123,9 +118,9 @@ export default async function DashboardPage() {
             {policy.limitDays === null ? (
               <>You can open entries of <b>any date</b>. No limit applies to you.</>
             ) : policy.limitDays === 0 ? (
-              <>You can open only the <b>current week</b>. Older entries are locked.</>
+              <>Entry is <b>locked</b> for your account. Contact the Super Admin.</>
             ) : (
-              <>You can open entries up to <b>{policy.limitDays} days back</b>. Older entries are locked and can be opened only by the Super Admin.</>
+              <>You can enter or edit the last <b>{policy.limitDays} day{policy.limitDays === 1 ? "" : "s"}</b> (today included). Older dates are locked and can be opened only by the Super Admin.</>
             )}
           </p>
         </Card>
