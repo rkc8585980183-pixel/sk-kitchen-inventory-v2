@@ -96,6 +96,8 @@ export default function InventoryForm({
   const [category, setCategory] = useState("all");
   const [submitting, setSubmitting] = useState(false);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [reason, setReason] = useState("");
 
@@ -112,7 +114,10 @@ export default function InventoryForm({
   const itemIds = useMemo(() => items.map((i) => i.id), [items]);
 
   function friendly(msg: string) {
-    return msg.includes("ENTRY_LOCKED") ? "This date is locked. Contact the Super Admin." : msg;
+    if (msg.includes("ENTRY_LOCKED")) return "This date is locked. Contact the Super Admin.";
+    if (msg.includes("ENTRY_SUBMITTED")) return "This entry is already submitted and locked.";
+    if (msg.includes("clear_inventory_entries")) return "Database update pending. Run the latest 001_entry_lock.sql in Supabase.";
+    return msg;
   }
 
   /** Saves every changed row in ONE request. Returns true when nothing is left unsaved. */
@@ -126,10 +131,12 @@ export default function InventoryForm({
 
     const q = qRef.current;
     const s = sRef.current;
-    const ids = itemIds.filter((id) => (q[id] ?? "") !== "" && q[id] !== (s[id] ?? ""));
-    if (!ids.length) return true;
+    const changed = itemIds.filter((id) => (q[id] ?? "") !== (s[id] ?? ""));
+    if (!changed.length) return true;
+    const upIds = changed.filter((id) => (q[id] ?? "") !== "");
+    const delIds = changed.filter((id) => (q[id] ?? "") === ""); // emptied fields = remove the saved entry
 
-    const rows = ids.map((item_id) => ({ period_id: period.id, item_id, quantity: parseFloat(q[item_id]) }));
+    const rows = upIds.map((item_id) => ({ period_id: period.id, item_id, quantity: parseFloat(q[item_id]) }));
     if (rows.some((r) => !Number.isFinite(r.quantity) || r.quantity < 0)) {
       setStatus("error");
       toast("Quantities must be numbers (0 or more).", "error");
@@ -138,13 +145,23 @@ export default function InventoryForm({
 
     setStatus("saving");
     const job = (async () => {
-      const { error } = await supabase.from("inventory_entries").upsert(rows, { onConflict: "period_id,item_id" });
-      if (error) {
-        setStatus("error");
-        toast(friendly(error.message), "error");
-        return false;
+      if (rows.length) {
+        const { error } = await supabase.from("inventory_entries").upsert(rows, { onConflict: "period_id,item_id" });
+        if (error) {
+          setStatus("error");
+          toast(friendly(error.message), "error");
+          return false;
+        }
       }
-      const patch = Object.fromEntries(ids.map((id) => [id, q[id]]));
+      if (delIds.length) {
+        const { error } = await supabase.rpc("clear_inventory_entries", { p_period_id: period.id, p_item_ids: delIds });
+        if (error) {
+          setStatus("error");
+          toast(friendly(error.message), "error");
+          return false;
+        }
+      }
+      const patch = Object.fromEntries(changed.map((id) => [id, q[id] ?? ""]));
       sRef.current = { ...sRef.current, ...patch };
       setSaved((prev) => ({ ...prev, ...patch }));
       setSavedAt(new Date());
@@ -185,9 +202,10 @@ export default function InventoryForm({
   }, []);
 
   const dirtyIds = useMemo(
-    () => itemIds.filter((id) => (quantities[id] ?? "") !== "" && quantities[id] !== (saved[id] ?? "")),
+    () => itemIds.filter((id) => (quantities[id] ?? "") !== (saved[id] ?? "")),
     [itemIds, quantities, saved]
   );
+  const hasSaved = useMemo(() => itemIds.some((id) => (saved[id] ?? "") !== ""), [itemIds, saved]);
   const dirtySet = useMemo(() => new Set(dirtyIds), [dirtyIds]);
   const entered = useMemo(() => itemIds.filter((id) => (quantities[id] ?? "") !== "").length, [itemIds, quantities]);
 
@@ -227,6 +245,29 @@ export default function InventoryForm({
     }
     toast("Inventory submitted and locked.");
     router.refresh();
+  }
+
+  async function handleClearAll() {
+    setConfirmClear(false);
+    setClearing(true);
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (running.current) await running.current;
+    const { error } = await supabase.rpc("clear_inventory_entries", { p_period_id: period.id });
+    setClearing(false);
+    if (error) {
+      toast(friendly(error.message), "error");
+      return;
+    }
+    qRef.current = {};
+    sRef.current = {};
+    setQuantities({});
+    setSaved({});
+    setStatus("idle");
+    setSavedAt(new Date());
+    toast("All entries cleared.");
   }
 
   async function handleUnlock() {
@@ -343,9 +384,14 @@ export default function InventoryForm({
           </div>
           <div className="ml-auto flex gap-2">
             {canEdit ? (
+              <>
+              <Button variant="danger" icon="trash" loading={clearing} disabled={submitting || (entered === 0 && !hasSaved)} onClick={() => setConfirmClear(true)}>
+                Clear all
+              </Button>
               <Button variant="primary" icon="check" loading={submitting} disabled={status === "saving" || items.length === 0} onClick={() => setConfirmSubmit(true)}>
                 Submit
               </Button>
+              </>
             ) : canUnlock ? (
               <Button variant="warning" icon="unlock" onClick={() => setUnlocking(true)}>
                 Unlock for editing
@@ -373,6 +419,25 @@ export default function InventoryForm({
           {entered} of {items.length} items have a quantity.
           {entered < items.length && <> The remaining <b>{items.length - entered}</b> are still empty.</>} After you submit, this entry is
           locked and cannot be edited again.
+        </p>
+      </Modal>
+
+      <Modal
+        open={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Clear all quantities?"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setConfirmClear(false)}>Cancel</Button>
+            <Button variant="danger" onClick={handleClearAll}>
+              Yes, clear all
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-slate-600">
+          This removes all <b>{entered}</b> quantities entered for this date, including the ones already saved. This cannot be undone.
         </p>
       </Modal>
 

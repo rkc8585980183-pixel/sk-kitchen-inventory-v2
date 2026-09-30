@@ -137,11 +137,53 @@ begin
   return v_row;
 end $$;
 
+-- 5b. Delete saved quantities of an entry (all items, or only the given items).
+--     Not allowed once the entry is submitted, or outside the allowed date window.
+create or replace function public.clear_inventory_entries(p_period_id uuid, p_item_ids uuid[] default null)
+returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  v_uid uuid := auth.uid();
+  v_role text; v_dept uuid; v_days int; v_n int;
+  v_p public.inventory_periods;
+begin
+  if v_uid is null then raise exception 'Not signed in'; end if;
+
+  select role, department_id into v_role, v_dept
+    from public.profiles where id = v_uid and is_active;
+  if not found then raise exception 'No active profile for this user'; end if;
+
+  select * into v_p from public.inventory_periods where id = p_period_id;
+  if not found then raise exception 'Entry not found'; end if;
+
+  if v_role = 'department_user' and v_dept is distinct from v_p.department_id then
+    raise exception 'You can only change your own department';
+  end if;
+
+  if v_p.status = 'submitted' then
+    raise exception 'ENTRY_SUBMITTED: this entry is submitted and locked.' using errcode = 'P0001';
+  end if;
+
+  v_days := public.entry_window_days(v_uid);
+  if v_days is not null and v_p.week_end < ((now() at time zone 'Asia/Kolkata')::date - (v_days - 1)) then
+    raise exception 'ENTRY_LOCKED: this date is locked. You can edit the last % day(s) only.', v_days
+      using errcode = 'P0001';
+  end if;
+
+  delete from public.inventory_entries
+   where period_id = p_period_id
+     and (p_item_ids is null or item_id = any(p_item_ids));
+  get diagnostics v_n = row_count;
+  return v_n;
+end $$;
+
 revoke all on function public.entry_window_days(uuid) from public, anon, authenticated;
 revoke all on function public.my_entry_window() from public, anon;
 revoke all on function public.start_inventory_day(uuid, date) from public, anon;
+revoke all on function public.clear_inventory_entries(uuid, uuid[]) from public, anon;
 grant execute on function public.my_entry_window() to authenticated;
 grant execute on function public.start_inventory_day(uuid, date) to authenticated;
+grant execute on function public.clear_inventory_entries(uuid, uuid[]) to authenticated;
 
 -- 6. Hard enforcement: block writes to entries outside the allowed window.
 --    (Service role / SQL editor have no auth.uid(), so they are never blocked.)
