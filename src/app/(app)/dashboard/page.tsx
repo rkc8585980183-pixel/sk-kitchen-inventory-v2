@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentProfile, isAdmin } from "@/lib/auth";
-import { getEntryPolicy } from "@/lib/lock";
-import { fmtDateTime, fmtWeekday, todayIST } from "@/lib/utils";
+import { getEntryPolicy, getEntryTime } from "@/lib/lock";
+import { fmtDateTime, fmtTime12, fmtWeekday, todayIST } from "@/lib/utils";
 import Icon, { type IconName } from "@/components/Icons";
 import { buttonCls, Card, Notice, PageHeader, ProgressBar, StatusBadge } from "@/components/ui";
 
@@ -15,7 +15,7 @@ export default async function DashboardPage() {
   const today = todayIST();
 
   // All independent queries run in parallel (was: one after another).
-  const [deptRes, periodRes, itemsRes, policy] = await Promise.all([
+  const [deptRes, periodRes, itemsRes, policy, time] = await Promise.all([
     supabase.from("departments").select("id, name").eq("is_active", true).order("name"),
     supabase
       .from("inventory_periods")
@@ -24,6 +24,7 @@ export default async function DashboardPage() {
       .eq("week_end", today),
     supabase.from("items").select("id", { count: "exact", head: true }).eq("is_active", true),
     getEntryPolicy(),
+    getEntryTime(),
   ]);
 
   const departments = deptRes.data ?? [];
@@ -45,9 +46,16 @@ export default async function DashboardPage() {
         title={`Hello, ${profile.full_name.split(" ")[0]}`}
         subtitle={`Today: ${fmtWeekday(today)}`}
         actions={
-          <Link href="/inventory" className={buttonCls("primary")}>
-            <Icon name="inventory" size={16} /> Open inventory
-          </Link>
+          <>
+            {admin && (
+              <Link href="/closing" className={buttonCls("secondary")}>
+                <Icon name="table" size={16} /> Edit closing data
+              </Link>
+            )}
+            <Link href="/inventory" className={buttonCls("primary")}>
+              <Icon name="inventory" size={16} /> Open inventory
+            </Link>
+          </>
         }
       />
 
@@ -123,6 +131,14 @@ export default async function DashboardPage() {
               <>You can enter or edit the last <b>{policy.limitDays} day{policy.limitDays === 1 ? "" : "s"}</b> (today included). Older dates are locked and can be opened only by the Super Admin.</>
             )}
           </p>
+          {time.applies && time.open && time.close && (
+            <p className="mt-3 text-sm text-slate-600">
+              Entry time: <b>{fmtTime12(time.open)} – {fmtTime12(time.close)}</b> (IST).{" "}
+              <span className={time.isOpen ? "font-medium text-emerald-600" : "font-medium text-red-600"}>
+                {time.isOpen ? "Open now." : "Closed now."}
+              </span>
+            </p>
+          )}
         </Card>
       </div>
     </div>

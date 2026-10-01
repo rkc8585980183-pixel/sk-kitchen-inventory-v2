@@ -1,5 +1,5 @@
 -- =====================================================================
--- SK Kitchen Inventory - Daily entries + Entry Lock (date window)
+-- SK Kitchen Inventory - Daily entries + Entry Lock (days) + Entry time (open/close)
 -- Run this in: Supabase Dashboard -> SQL Editor -> New query -> Run
 -- Safe to run again (it also UPDATES an older version of this file).
 -- =====================================================================
@@ -11,6 +11,8 @@
 --   * back_days = N means the last N days are open, TODAY INCLUDED:
 --       0 = fully locked, 1 = today only, 2 = today + yesterday, 7 = last 7 days.
 --   * A draft is saved automatically and stays open until Submit is clicked.
+--   * Entry time (optional): department users can open/edit/submit only between the
+--     opening and closing time (India time). Admin and Super Admin are not affected.
 -- =====================================================================
 
 -- 1. Global settings (single row)
@@ -23,6 +25,10 @@ create table if not exists public.lock_settings (
   updated_by              uuid
 );
 insert into public.lock_settings (id) values (1) on conflict (id) do nothing;
+
+alter table public.lock_settings add column if not exists time_lock_enabled boolean not null default false;
+alter table public.lock_settings add column if not exists entry_open_time  time not null default '00:00';
+alter table public.lock_settings add column if not exists entry_close_time time not null default '23:59';
 
 alter table public.lock_settings enable row level security;
 drop policy if exists lock_settings_read on public.lock_settings;
@@ -87,6 +93,59 @@ language sql stable security definer set search_path = public as $$
   select public.entry_window_days(auth.uid());
 $$;
 
+-- 4b. Entry time window (department users only, India time)
+create or replace function public.entry_time_state(p_user uuid)
+returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  s record;
+  v_role text;
+  v_now  time := (now() at time zone 'Asia/Kolkata')::time;
+  v_open boolean;
+begin
+  select * into s from public.lock_settings where id = 1;
+  if not found or not s.time_lock_enabled then
+    return jsonb_build_object('applies', false, 'is_open', true);
+  end if;
+
+  select role into v_role from public.profiles where id = p_user;
+  if not found or v_role is distinct from 'department_user' then
+    return jsonb_build_object('applies', false, 'is_open', true);
+  end if;
+
+  if s.entry_open_time = s.entry_close_time then
+    v_open := true;                                          -- same time = open all day
+  elsif s.entry_open_time < s.entry_close_time then
+    v_open := v_now >= s.entry_open_time and v_now < s.entry_close_time;
+  else                                                       -- overnight, e.g. 20:00 -> 04:00
+    v_open := v_now >= s.entry_open_time or v_now < s.entry_close_time;
+  end if;
+
+  return jsonb_build_object(
+    'applies', true,
+    'is_open', v_open,
+    'open_time', to_char(s.entry_open_time, 'HH24:MI'),
+    'close_time', to_char(s.entry_close_time, 'HH24:MI')
+  );
+end $$;
+
+create or replace function public.my_entry_time()
+returns jsonb
+language sql stable security definer set search_path = public as $$
+  select public.entry_time_state(auth.uid());
+$$;
+
+create or replace function public.assert_entry_time_open(p_user uuid)
+returns void
+language plpgsql stable security definer set search_path = public as $$
+declare st jsonb := public.entry_time_state(p_user);
+begin
+  if (st->>'applies')::boolean and not (st->>'is_open')::boolean then
+    raise exception 'ENTRY_CLOSED: entry is open only from % to % (India time).', st->>'open_time', st->>'close_time'
+      using errcode = 'P0001';
+  end if;
+end $$;
+
 -- 5. Open (or create) the entry of one department for one date.
 create or replace function public.start_inventory_day(p_department_id uuid, p_date date)
 returns public.inventory_periods
@@ -106,6 +165,8 @@ begin
   if v_role = 'department_user' and v_dept is distinct from p_department_id then
     raise exception 'You can only open your own department';
   end if;
+
+  perform public.assert_entry_time_open(v_uid);
 
   if p_date > v_today then
     raise exception 'ENTRY_LOCKED: future dates cannot be opened.' using errcode = 'P0001';
@@ -160,6 +221,8 @@ begin
     raise exception 'You can only change your own department';
   end if;
 
+  perform public.assert_entry_time_open(v_uid);
+
   if v_p.status = 'submitted' then
     raise exception 'ENTRY_SUBMITTED: this entry is submitted and locked.' using errcode = 'P0001';
   end if;
@@ -177,13 +240,75 @@ begin
   return v_n;
 end $$;
 
+-- 5c. Admin / Super Admin: change item quantities of ANY department for a date (even if submitted).
+--     p_rows = [{"item_id": "...", "quantity": 12.5}, {"item_id": "...", "quantity": null}]  (null = remove)
+--     Admin follows their own day limit; Super Admin has none.
+create or replace function public.admin_save_entries(p_department_id uuid, p_date date, p_rows jsonb)
+returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  v_uid uuid := auth.uid();
+  v_role text; v_days int; v_n int := 0; v_item uuid; v_q numeric; r jsonb;
+  v_today date := (now() at time zone 'Asia/Kolkata')::date;
+  v_period public.inventory_periods;
+begin
+  if v_uid is null then raise exception 'Not signed in'; end if;
+
+  select role into v_role from public.profiles where id = v_uid and is_active;
+  if not found or v_role not in ('admin', 'super_admin') then
+    raise exception 'Only Admin or Super Admin can edit closing data';
+  end if;
+
+  if p_date > v_today then
+    raise exception 'ENTRY_LOCKED: future dates cannot be edited.' using errcode = 'P0001';
+  end if;
+  v_days := public.entry_window_days(v_uid);
+  if v_days is not null and p_date < v_today - (v_days - 1) then
+    raise exception 'ENTRY_LOCKED: this date is locked. You can edit the last % day(s) only.', v_days
+      using errcode = 'P0001';
+  end if;
+
+  select * into v_period from public.start_inventory_day(p_department_id, p_date);
+
+  for r in select jsonb_array_elements(p_rows) loop
+    v_item := (r->>'item_id')::uuid;
+    if r->>'quantity' is null or r->>'quantity' = '' then
+      delete from public.inventory_entries where period_id = v_period.id and item_id = v_item;
+    else
+      v_q := (r->>'quantity')::numeric;
+      if v_q < 0 then raise exception 'Quantity cannot be negative'; end if;
+      insert into public.inventory_entries (period_id, item_id, quantity)
+      values (v_period.id, v_item, v_q)
+      on conflict (period_id, item_id) do update set quantity = excluded.quantity;
+    end if;
+    v_n := v_n + 1;
+  end loop;
+
+  begin   -- audit trail is best effort
+    insert into public.audit_logs (username, role, department_name, action, description)
+    select p.username, v_role, d.name, 'admin_edit_entries',
+           format('Edited %s item quantity(ies) for %s on %s', v_n, d.name, p_date)
+      from public.profiles p, public.departments d
+     where p.id = v_uid and d.id = p_department_id;
+  exception when others then null;
+  end;
+
+  return v_n;
+end $$;
+
 revoke all on function public.entry_window_days(uuid) from public, anon, authenticated;
+revoke all on function public.entry_time_state(uuid) from public, anon, authenticated;
+revoke all on function public.assert_entry_time_open(uuid) from public, anon, authenticated;
+revoke all on function public.my_entry_time() from public, anon;
+grant execute on function public.my_entry_time() to authenticated;
 revoke all on function public.my_entry_window() from public, anon;
 revoke all on function public.start_inventory_day(uuid, date) from public, anon;
 revoke all on function public.clear_inventory_entries(uuid, uuid[]) from public, anon;
+revoke all on function public.admin_save_entries(uuid, date, jsonb) from public, anon;
 grant execute on function public.my_entry_window() to authenticated;
 grant execute on function public.start_inventory_day(uuid, date) to authenticated;
 grant execute on function public.clear_inventory_entries(uuid, uuid[]) to authenticated;
+grant execute on function public.admin_save_entries(uuid, date, jsonb) to authenticated;
 
 -- 6. Hard enforcement: block writes to entries outside the allowed window.
 --    (Service role / SQL editor have no auth.uid(), so they are never blocked.)
@@ -197,6 +322,8 @@ begin
     if tg_op = 'DELETE' then return old; end if;
     return new;
   end if;
+
+  perform public.assert_entry_time_open(auth.uid());
 
   if tg_op = 'DELETE' then v_period := old.period_id; else v_period := new.period_id; end if;
 
@@ -217,3 +344,19 @@ drop trigger if exists trg_entry_window on public.inventory_entries;
 create trigger trg_entry_window
   before insert or update or delete on public.inventory_entries
   for each row execute function public.enforce_entry_window();
+
+-- 7. Submitting is also only possible inside the entry time (department users).
+create or replace function public.enforce_submit_time()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and new.status = 'submitted' and old.status is distinct from 'submitted' then
+    perform public.assert_entry_time_open(auth.uid());
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_submit_time on public.inventory_periods;
+create trigger trg_submit_time
+  before update on public.inventory_periods
+  for each row execute function public.enforce_submit_time();

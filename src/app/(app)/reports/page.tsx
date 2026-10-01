@@ -19,14 +19,18 @@ export default async function ReportsPage() {
   // Admins with a date limit only see reports inside their allowed window.
   if (policy.cutoff) q = q.gte("inventory_periods.week_end", policy.cutoff);
 
-  const [departments, rows] = await Promise.all([
-    supabase.from("departments").select("id, name").order("name"),
+  const [departments, items, rows] = await Promise.all([
+    supabase.from("departments").select("id, name, is_active").order("name"),
+    supabase.from("items").select("id, item_code, item_name, category, unit, is_active").order("item_code"),
     q,
   ]);
 
   return (
     <ReportsClient
       departments={departments.data ?? []}
+      items={items.data ?? []}
+      today={policy.today}
+      minDate={policy.cutoff && policy.cutoff <= policy.today ? policy.cutoff : undefined}
       rows={(rows.data ?? []) as unknown as React.ComponentProps<typeof ReportsClient>["rows"]}
       limitedFrom={policy.cutoff ? fmtDay(policy.cutoff, true) : null}
     />

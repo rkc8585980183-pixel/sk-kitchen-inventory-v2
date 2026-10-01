@@ -1,9 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentProfile, isAdmin } from "@/lib/auth";
-import { getEntryPolicy, isPeriodOpen } from "@/lib/lock";
-import { addDays, chipLabel, fmtDay, fmtWeekday, todayIST } from "@/lib/utils";
+import { getEntryPolicy, getEntryTime, isPeriodOpen } from "@/lib/lock";
+import { addDays, chipLabel, fmtDay, fmtTime12, fmtWeekday, todayIST } from "@/lib/utils";
 import type { Item, PeriodLite } from "@/types";
-import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
+import { Badge, Card, EmptyState, Notice, PageHeader } from "@/components/ui";
 import InventoryFilters from "./InventoryFilters";
 import InventoryForm from "./InventoryForm";
 
@@ -23,8 +23,9 @@ export default async function InventoryPage({
   let date = params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : today;
   if (date > today) date = today;
 
-  const [policy, deptRes] = await Promise.all([
+  const [policy, time, deptRes] = await Promise.all([
     getEntryPolicy(),
+    getEntryTime(),
     admin
       ? supabase.from("departments").select("id, name").eq("is_active", true).order("name")
       : Promise.resolve({ data: [] as { id: string; name: string }[] }),
@@ -39,6 +40,20 @@ export default async function InventoryPage({
           Ask your administrator to assign you to a department.
         </EmptyState>
       </Card>
+    );
+  }
+
+  // Daily entry time (set in Settings): outside the window the entry is closed for departments.
+  if (time.applies && !time.isOpen && time.open && time.close) {
+    return (
+      <div className="space-y-5">
+        <PageHeader title="Inventory entry" subtitle={fmtWeekday(today)} />
+        <Card>
+          <EmptyState icon="clock" title="Entry is closed right now">
+            Entry is open every day from <b>{fmtTime12(time.open)}</b> to <b>{fmtTime12(time.close)}</b> (India time). Please come back during that time.
+          </EmptyState>
+        </Card>
+      </div>
     );
   }
 
@@ -132,6 +147,12 @@ export default async function InventoryPage({
           )
         }
       />
+
+      {time.applies && time.open && time.close && (
+        <Notice tone="info" icon="clock">
+          Entry time today: <b>{fmtTime12(time.open)}</b> to <b>{fmtTime12(time.close)}</b> (India time).
+        </Notice>
+      )}
 
       <InventoryFilters
         departments={departments}

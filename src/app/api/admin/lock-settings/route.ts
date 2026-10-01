@@ -18,6 +18,7 @@ async function requireSuperAdmin() {
 // null = use default, -1 = no limit, 0..3650 = days back
 const validLimit = (v: unknown): v is number | null =>
   v === null || (typeof v === "number" && Number.isInteger(v) && (v === -1 || (v >= 0 && v <= 3650)));
+const validTime = (v: unknown): v is string => typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
 const validDays = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 3650;
 
 type Change = { id: string; back_days: number | null };
@@ -31,15 +32,18 @@ export async function PUT(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "Invalid request." }, { status: 400 });
 
-  const { enabled, default_department_days, default_admin_days, departments = [], admins = [] } = body;
+  const { enabled, default_department_days, default_admin_days, time_lock_enabled, entry_open_time, entry_close_time, departments = [], admins = [] } = body;
   if (
     typeof enabled !== "boolean" ||
+    typeof time_lock_enabled !== "boolean" ||
+    !validTime(entry_open_time) ||
+    !validTime(entry_close_time) ||
     !validDays(default_department_days) ||
     !validDays(default_admin_days) ||
     !validChanges(departments) ||
     !validChanges(admins)
   ) {
-    return NextResponse.json({ error: "Invalid values. Days must be whole numbers from 0 to 3650." }, { status: 400 });
+    return NextResponse.json({ error: "Invalid values. Days must be whole numbers from 0 to 3650 and times must look like 09:30." }, { status: 400 });
   }
 
   const db = service();
@@ -49,11 +53,14 @@ export async function PUT(req: NextRequest) {
     enabled,
     default_department_days,
     default_admin_days,
+    time_lock_enabled,
+    entry_open_time,
+    entry_close_time,
     updated_at: new Date().toISOString(),
     updated_by: caller.id,
   });
   if (sErr) {
-    const hint = /lock_settings|schema cache|does not exist/i.test(sErr.message)
+    const hint = /lock_settings|schema cache|does not exist|column/i.test(sErr.message)
       ? " Run supabase/migrations/001_entry_lock.sql in the Supabase SQL Editor first."
       : "";
     return NextResponse.json({ error: sErr.message + hint }, { status: 400 });
@@ -72,8 +79,8 @@ export async function PUT(req: NextRequest) {
     await db.from("audit_logs").insert({
       username: caller.username,
       role: caller.role,
-      action: "entry_lock_updated",
-      description: `Entry lock ${enabled ? "ON" : "OFF"} · default dept ${default_department_days}d, admin ${default_admin_days}d · ${departments.length} dept + ${admins.length} admin override(s) changed`,
+      action: "settings_updated",
+      description: `Settings saved · entry time ${time_lock_enabled ? `${entry_open_time}-${entry_close_time}` : "OFF"} · entry lock ${enabled ? "ON" : "OFF"} · default dept ${default_department_days}d, admin ${default_admin_days}d · ${departments.length} dept + ${admins.length} admin override(s) changed`,
     });
   } catch {
     /* ignore */

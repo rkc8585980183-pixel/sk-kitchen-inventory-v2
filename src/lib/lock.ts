@@ -32,3 +32,25 @@ export const getEntryPolicy = cache(async (): Promise<EntryPolicy> => {
 export function isPeriodOpen(policy: EntryPolicy, date: string) {
   return date <= policy.today && (policy.cutoff === null || date >= policy.cutoff);
 }
+
+export interface EntryTime {
+  /** true when a time window applies to this user (department users only) */
+  applies: boolean;
+  isOpen: boolean;
+  /** "HH:MM" India time */
+  open: string | null;
+  close: string | null;
+}
+
+/** Is the daily entry time window open right now for the signed-in user? */
+export const getEntryTime = cache(async (): Promise<EntryTime> => {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("my_entry_time");
+  if (error || !data) return { applies: false, isOpen: true, open: null, close: null };
+  return {
+    applies: !!data.applies,
+    isOpen: data.is_open !== false,
+    open: data.open_time ?? null,
+    close: data.close_time ?? null,
+  };
+});

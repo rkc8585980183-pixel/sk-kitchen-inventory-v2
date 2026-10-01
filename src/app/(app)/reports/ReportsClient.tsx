@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Badge, Button, Card, EmptyState, Field, inputCls, Notice, PageHeader, selectCls, StatusBadge, td, th } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import ClosingExports from "./ClosingExports";
 
 interface Row {
   quantity: number;
@@ -20,10 +21,16 @@ const PAGE = 100;
 
 export default function ReportsClient({
   departments,
+  items,
+  today,
+  minDate,
   rows,
   limitedFrom,
 }: {
-  departments: { id: string; name: string }[];
+  departments: { id: string; name: string; is_active?: boolean }[];
+  items: { id: string; item_code: string; item_name: string; category: string | null; unit: string; is_active: boolean }[];
+  today: string;
+  minDate?: string;
   rows: Row[];
   limitedFrom: string | null;
 }) {
@@ -131,6 +138,9 @@ export default function ReportsClient({
         </div>
       )}
 
+      <ClosingExports departments={departments} items={items} today={today} minDate={minDate} />
+
+      <h2 className="mb-3 text-base font-semibold text-slate-900">All entries</h2>
       <Card className="mb-4 p-4">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
           <Field label="Department">

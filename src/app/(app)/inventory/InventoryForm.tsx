@@ -114,6 +114,7 @@ export default function InventoryForm({
   const itemIds = useMemo(() => items.map((i) => i.id), [items]);
 
   function friendly(msg: string) {
+    if (msg.includes("ENTRY_CLOSED")) return "Entry time is over. Changes are not saved now.";
     if (msg.includes("ENTRY_LOCKED")) return "This date is locked. Contact the Super Admin.";
     if (msg.includes("ENTRY_SUBMITTED")) return "This entry is already submitted and locked.";
     if (msg.includes("clear_inventory_entries")) return "Database update pending. Run the latest 001_entry_lock.sql in Supabase.";

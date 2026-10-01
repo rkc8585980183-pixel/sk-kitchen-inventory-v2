@@ -51,7 +51,7 @@ export default function DepartmentsClient({ initialDepartments }: { initialDepar
         subtitle={`${initialDepartments.length} departments`}
         actions={
           <>
-            <Link href="/entry-lock" className={buttonCls("secondary")}>Entry lock limits</Link>
+            <Link href="/settings" className={buttonCls("secondary")}>Entry settings</Link>
             <Button variant="primary" icon="plus" onClick={() => setEditing({ code: "", name: "" })}>Add department</Button>
           </>
         }

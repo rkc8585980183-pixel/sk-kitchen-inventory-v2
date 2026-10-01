@@ -67,3 +67,9 @@ export function chipLabel(iso: string, today: string): string {
   if (iso === addDays(today, -1)) return "Yesterday";
   return new Date(iso + "T00:00:00Z").toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", timeZone: "UTC" });
 }
+
+/** "21:30" -> "9:30 PM" */
+export function fmtTime12(t: string): string {
+  const [h, m] = t.split(":").map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
+}

@@ -20,6 +20,7 @@ const SECTIONS: { title: string; items: Nav[] }[] = [
     items: [
       { href: "/dashboard", label: "Dashboard", icon: "dashboard", roles: ALL },
       { href: "/inventory", label: "Inventory", icon: "inventory", roles: ALL },
+      { href: "/closing", label: "Closing data", icon: "table", roles: ADM },
     ],
   },
   {
@@ -36,7 +37,7 @@ const SECTIONS: { title: string; items: Nav[] }[] = [
       { href: "/mapping", label: "Mapping", icon: "mapping", roles: ADM },
       { href: "/users", label: "Users", icon: "users", roles: ADM },
       { href: "/departments", label: "Departments", icon: "departments", roles: ["super_admin"] },
-      { href: "/entry-lock", label: "Entry Lock", icon: "lock", roles: ["super_admin"] },
+      { href: "/settings", label: "Settings", icon: "sliders", roles: ["super_admin"] },
     ],
   },
 ];
