@@ -8,6 +8,7 @@ import { cn, roleLabel } from "@/lib/utils";
 import type { Profile } from "@/types";
 import Icon, { type IconName } from "./Icons";
 import { Avatar } from "./ui";
+import Logo from "./Logo";
 
 type Nav = { href: string; label: string; icon: IconName; roles: string[] };
 
@@ -57,9 +58,7 @@ function SidebarContent({ profile, onNavigate }: { profile: Profile; onNavigate?
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-3 px-5 py-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-orange-500 text-sm font-bold text-white shadow-lg shadow-orange-500/30">
-          SK
-        </div>
+        <Logo size={36} className="shadow-lg shadow-black/30" />
         <div className="leading-tight">
           <p className="text-sm font-semibold text-white">SK Kitchen</p>
           <p className="text-xs text-slate-400">Inventory</p>
@@ -141,7 +140,7 @@ export default function AppShell({ profile, children }: { profile: Profile; chil
           <Icon name="menu" size={20} />
         </button>
         <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-orange-500 text-xs font-bold text-white">SK</div>
+          <Logo size={28} className="rounded-lg" />
           <span className="text-sm font-semibold text-slate-900">Kitchen Inventory</span>
         </div>
       </header>

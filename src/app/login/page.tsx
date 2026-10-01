@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import Icon from "@/components/Icons";
+import Logo from "@/components/Logo";
 import { Button, Field, inputCls, Notice } from "@/components/ui";
 
 const MESSAGES: Record<string, string> = {
@@ -48,9 +49,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-12">
       <div className="w-full max-w-sm rounded-2xl border border-slate-200/80 bg-white p-8 shadow-card">
         <div className="mb-8 text-center">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-orange-500 text-lg font-bold text-white shadow-lg shadow-orange-500/30">
-            SK
-          </div>
+          <Logo size={72} className="mx-auto rounded-2xl shadow-lg shadow-black/10" />
           <h1 className="mt-4 text-xl font-semibold tracking-tight text-slate-900">SK Kitchen Inventory</h1>
           <p className="mt-1 text-sm text-slate-500">Sign in to continue</p>
         </div>
