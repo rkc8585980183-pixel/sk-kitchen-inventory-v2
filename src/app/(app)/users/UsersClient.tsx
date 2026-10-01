@@ -25,10 +25,12 @@ export default function UsersClient({
   initialUsers,
   departments,
   currentRole,
+  currentUserId,
 }: {
   initialUsers: UserRow[];
   departments: { id: string; name: string }[];
   currentRole: string;
+  currentUserId: string;
 }) {
   const router = useRouter();
   const { toast } = useToast();
@@ -36,6 +38,11 @@ export default function UsersClient({
   const [form, setForm] = useState(emptyForm(departments[0]?.id || ""));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const [editUser, setEditUser] = useState<UserRow | null>(null);
+  const [editForm, setEditForm] = useState({ full_name: "", username: "", email: "", role: "department_user", department_id: "" });
+  const [editError, setEditError] = useState<string | null>(null);
+
   const [resetUser, setResetUser] = useState<UserRow | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [search, setSearch] = useState("");
@@ -68,6 +75,43 @@ export default function UsersClient({
     toast("User created.");
     setCreating(false);
     setForm(emptyForm(departments[0]?.id || ""));
+    router.refresh();
+  }
+
+  function openEdit(u: UserRow) {
+    setEditForm({
+      full_name: u.full_name,
+      username: u.username,
+      email: u.email,
+      role: u.role,
+      department_id: u.department_id ?? departments[0]?.id ?? "",
+    });
+    setEditError(null);
+    setEditUser(u);
+  }
+
+  async function handleEdit() {
+    if (!editUser) return;
+    setSaving(true);
+    setEditError(null);
+    const isSelf = editUser.id === currentUserId;
+    const body: Record<string, unknown> = {
+      user_id: editUser.id,
+      full_name: editForm.full_name,
+      username: editForm.username,
+      email: editForm.email,
+    };
+    if (currentRole === "super_admin" && !isSelf) {
+      body.role = editForm.role;
+      if (editForm.role === "department_user") body.department_id = editForm.department_id;
+    } else if (editUser.role === "department_user") {
+      body.department_id = editForm.department_id;
+    }
+    const r = await call("PATCH", body);
+    setSaving(false);
+    if (!r.ok) return setEditError(r.error ?? "Could not update user.");
+    toast("User updated.");
+    setEditUser(null);
     router.refresh();
   }
 
@@ -112,7 +156,7 @@ export default function UsersClient({
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px]">
+          <table className="w-full min-w-[820px]">
             <thead className="bg-slate-50/70">
               <tr>
                 <th className={th}>User</th>
@@ -138,6 +182,7 @@ export default function UsersClient({
                   <td className={td}>{u.departments?.name || "—"}</td>
                   <td className={td}><Badge tone={u.is_active ? "green" : "slate"} dot>{u.is_active ? "Active" : "Inactive"}</Badge></td>
                   <td className={cn(td, "space-x-1 text-right whitespace-nowrap")}>
+                    <Button size="sm" variant="ghost" icon="pencil" onClick={() => openEdit(u)}>Edit</Button>
                     <Button size="sm" variant="ghost" icon="key" onClick={() => setResetUser(u)}>Reset password</Button>
                     <Button size="sm" variant="ghost" onClick={() => toggleActive(u)}>{u.is_active ? "Deactivate" : "Activate"}</Button>
                   </td>
@@ -179,6 +224,46 @@ export default function UsersClient({
           </Field>
         )}
         {error && <Notice tone="danger">{error}</Notice>}
+      </Modal>
+
+      <Modal
+        open={!!editUser}
+        onClose={() => setEditUser(null)}
+        title={`Edit user${editUser ? ` · @${editUser.username}` : ""}`}
+        footer={
+          <>
+            <Button onClick={() => setEditUser(null)}>Cancel</Button>
+            <Button variant="primary" loading={saving} onClick={handleEdit}>Save changes</Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Full name"><input value={editForm.full_name} onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} className={inputCls} /></Field>
+          <Field label="Username"><input value={editForm.username} onChange={(e) => setEditForm({ ...editForm, username: e.target.value })} className={inputCls} /></Field>
+        </div>
+        <Field label="Email" hint="This is also the login email.">
+          <input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} className={inputCls} />
+        </Field>
+        {currentRole === "super_admin" && (
+          <Field label="Role" hint={editUser?.id === currentUserId ? "You cannot change your own role." : undefined}>
+            <select
+              value={editForm.role}
+              disabled={editUser?.id === currentUserId}
+              onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+              className={selectCls}
+            >
+              {assignableRoles.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+            </select>
+          </Field>
+        )}
+        {editForm.role === "department_user" && (
+          <Field label="Department">
+            <select value={editForm.department_id} onChange={(e) => setEditForm({ ...editForm, department_id: e.target.value })} className={selectCls}>
+              {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </Field>
+        )}
+        {editError && <Notice tone="danger">{editError}</Notice>}
       </Modal>
 
       <Modal

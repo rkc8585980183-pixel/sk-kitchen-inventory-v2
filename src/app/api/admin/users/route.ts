@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 
+const ROLES = ["super_admin", "admin", "department_user"];
+const emailOk = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+
 function adminClient() {
   return createServiceClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
 }
@@ -14,18 +17,20 @@ async function requireAdmin() {
   if (!user) return null;
   const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
   if (!profile || !["admin", "super_admin"].includes(profile.role)) return null;
-  return profile;
+  return { id: user.id, role: profile.role as string };
 }
+
+const fail = (error: string, status = 400) => NextResponse.json({ error }, { status });
 
 export async function POST(req: NextRequest) {
   const caller = await requireAdmin();
-  if (!caller) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!caller) return fail("Forbidden", 403);
 
   const body = await req.json();
   const { username, full_name, email, password, role, department_id } = body;
 
   if (caller.role === "admin" && role !== "department_user") {
-    return NextResponse.json({ error: "Admins can only create department users" }, { status: 403 });
+    return fail("Admins can only create department users", 403);
   }
 
   const admin = adminClient();
@@ -35,7 +40,7 @@ export async function POST(req: NextRequest) {
     email_confirm: true,
   });
   if (createErr || !created.user) {
-    return NextResponse.json({ error: createErr?.message || "Failed to create auth user" }, { status: 400 });
+    return fail(createErr?.message || "Failed to create auth user");
   }
 
   const { error: profileErr } = await admin.from("profiles").insert({
@@ -49,7 +54,7 @@ export async function POST(req: NextRequest) {
 
   if (profileErr) {
     await admin.auth.admin.deleteUser(created.user.id);
-    return NextResponse.json({ error: profileErr.message }, { status: 400 });
+    return fail(profileErr.message);
   }
 
   return NextResponse.json({ ok: true });
@@ -57,34 +62,85 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   const caller = await requireAdmin();
-  if (!caller) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!caller) return fail("Forbidden", 403);
 
-  const body = await req.json();
-  const { user_id, password, is_active, role, department_id, full_name } = body;
+  const body = await req.json().catch(() => null);
+  if (!body?.user_id) return fail("Invalid request.");
+  const { user_id, password, is_active, role, department_id, full_name, username, email } = body;
   const admin = adminClient();
 
+  const { data: target } = await admin.from("profiles").select("id, role, email").eq("id", user_id).single();
+  if (!target) return fail("User not found.", 404);
+
   // Admins may only manage department users, and may not change roles.
-  if (caller.role === "admin") {
-    const { data: target } = await admin.from("profiles").select("role").eq("id", user_id).single();
-    if (!target || target.role !== "department_user" || role !== undefined) {
-      return NextResponse.json({ error: "Admins can only manage department users" }, { status: 403 });
-    }
+  if (caller.role === "admin" && (target.role !== "department_user" || role !== undefined)) {
+    return fail("Admins can only manage department users", 403);
   }
 
-  if (password) {
-    const { error } = await admin.auth.admin.updateUserById(user_id, { password });
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  // Nobody can lock themselves out.
+  if (user_id === caller.id && ((role !== undefined && role !== target.role) || is_active === false)) {
+    return fail("You cannot change your own role or deactivate your own account.");
   }
 
   const updates: Record<string, unknown> = {};
-  if (is_active !== undefined) updates.is_active = is_active;
-  if (role !== undefined) updates.role = role;
-  if (department_id !== undefined) updates.department_id = department_id;
-  if (full_name !== undefined) updates.full_name = full_name;
 
+  if (full_name !== undefined) {
+    const v = String(full_name).trim();
+    if (!v) return fail("Full name is required.");
+    updates.full_name = v;
+  }
+  if (username !== undefined) {
+    const v = String(username).trim();
+    if (!v) return fail("Username is required.");
+    updates.username = v;
+  }
+
+  let newEmail: string | undefined;
+  if (email !== undefined) {
+    const v = String(email).trim().toLowerCase();
+    if (!emailOk(v)) return fail("Enter a valid email address.");
+    if (v !== String(target.email ?? "").toLowerCase()) {
+      newEmail = v;
+      updates.email = v;
+    }
+  }
+
+  if (is_active !== undefined) updates.is_active = !!is_active;
+
+  if (role !== undefined) {
+    if (!ROLES.includes(role)) return fail("Invalid role.");
+    updates.role = role;
+    if (role === "department_user") {
+      if (!department_id) return fail("Select a department for this user.");
+      updates.department_id = department_id;
+    } else {
+      updates.department_id = null;
+    }
+  } else if (department_id !== undefined) {
+    updates.department_id = department_id;
+  }
+
+  if (password !== undefined && String(password).length < 6) return fail("Password must be at least 6 characters.");
+
+  // 1) profile (catches duplicate usernames first)
   if (Object.keys(updates).length) {
     const { error } = await admin.from("profiles").update(updates).eq("id", user_id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (error) return fail(error.code === "23505" ? "That username or email is already in use." : error.message);
+  }
+
+  // 2) login email (undo the profile email if the auth update is rejected)
+  if (newEmail) {
+    const { error } = await admin.auth.admin.updateUserById(user_id, { email: newEmail, email_confirm: true });
+    if (error) {
+      await admin.from("profiles").update({ email: target.email }).eq("id", user_id);
+      return fail(error.message);
+    }
+  }
+
+  // 3) password
+  if (password) {
+    const { error } = await admin.auth.admin.updateUserById(user_id, { password });
+    if (error) return fail(error.message);
   }
 
   return NextResponse.json({ ok: true });

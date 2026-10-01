@@ -13,5 +13,5 @@ export default async function UsersPage() {
     supabase.from("departments").select("id, name").eq("is_active", true).order("name"),
   ]);
 
-  return <UsersClient initialUsers={users.data ?? []} departments={departments.data ?? []} currentRole={profile.role} />;
+  return <UsersClient initialUsers={users.data ?? []} departments={departments.data ?? []} currentRole={profile.role} currentUserId={profile.id} />;
 }
