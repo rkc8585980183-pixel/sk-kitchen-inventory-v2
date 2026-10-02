@@ -8,37 +8,36 @@ import { cn, roleLabel } from "@/lib/utils";
 import type { Profile } from "@/types";
 import Icon, { type IconName } from "./Icons";
 import { Avatar } from "./ui";
+import { can, type PermKey } from "@/lib/permissions";
 import Logo from "./Logo";
 
-type Nav = { href: string; label: string; icon: IconName; roles: string[] };
-
-const ALL = ["super_admin", "admin", "department_user"];
-const ADM = ["super_admin", "admin"];
+type Nav = { href: string; label: string; icon: IconName; perm?: PermKey; superOnly?: boolean };
 
 const SECTIONS: { title: string; items: Nav[] }[] = [
   {
     title: "Work",
     items: [
-      { href: "/dashboard", label: "Dashboard", icon: "dashboard", roles: ALL },
-      { href: "/inventory", label: "Inventory", icon: "inventory", roles: ALL },
-      { href: "/closing", label: "Closing data", icon: "table", roles: ADM },
+      { href: "/dashboard", label: "Dashboard", icon: "dashboard", perm: "dashboard" },
+      { href: "/inventory", label: "Inventory", icon: "inventory", perm: "inventory" },
+      { href: "/closing", label: "Closing data", icon: "table", perm: "closing" },
     ],
   },
   {
     title: "Insights",
     items: [
-      { href: "/reports", label: "Reports", icon: "reports", roles: ADM },
-      { href: "/trail", label: "Audit Trail", icon: "trail", roles: ADM },
+      { href: "/reports", label: "Reports", icon: "reports", perm: "reports" },
+      { href: "/trail", label: "Audit Trail", icon: "trail", perm: "trail" },
     ],
   },
   {
     title: "Manage",
     items: [
-      { href: "/items", label: "Items", icon: "items", roles: ADM },
-      { href: "/mapping", label: "Mapping", icon: "mapping", roles: ADM },
-      { href: "/users", label: "Users", icon: "users", roles: ADM },
-      { href: "/departments", label: "Departments", icon: "departments", roles: ["super_admin"] },
-      { href: "/settings", label: "Settings", icon: "sliders", roles: ["super_admin"] },
+      { href: "/items", label: "Items", icon: "items", perm: "items" },
+      { href: "/mapping", label: "Mapping", icon: "mapping", perm: "mapping" },
+      { href: "/users", label: "Users", icon: "users", perm: "users" },
+      { href: "/departments", label: "Departments", icon: "departments", superOnly: true },
+      { href: "/permissions", label: "Permissions", icon: "shield", superOnly: true },
+      { href: "/settings", label: "Settings", icon: "sliders", superOnly: true },
     ],
   },
 ];
@@ -67,7 +66,7 @@ function SidebarContent({ profile, onNavigate }: { profile: Profile; onNavigate?
 
       <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-2">
         {SECTIONS.map((s) => {
-          const items = s.items.filter((n) => n.roles.includes(profile.role));
+          const items = s.items.filter((n) => (n.superOnly ? profile.role === "super_admin" : n.perm ? can(profile, n.perm) : true));
           if (!items.length) return null;
           return (
             <div key={s.title}>

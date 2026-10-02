@@ -7,6 +7,8 @@ import { createClient } from "@/lib/supabase/client";
 import { cn, fmtDateTime, fmtWeekday } from "@/lib/utils";
 import Icon from "@/components/Icons";
 import Modal from "@/components/Modal";
+import { AlertDialog, AlertRow } from "@/components/AlertDialog";
+import type { QtyAlert } from "@/lib/alerts";
 import { useToast } from "@/components/Toast";
 import { Badge, Button, Card, EmptyState, inputCls, Notice, PageHeader, selectCls, Spinner, StatusBadge } from "@/components/ui";
 
@@ -23,6 +25,10 @@ export default function ClosingGrid({
   minDate,
   locked,
   limitDays,
+  canEdit,
+  canUnlock,
+  canOpenEntry,
+  alerts,
   departments,
   items,
   mappedPairs,
@@ -34,6 +40,10 @@ export default function ClosingGrid({
   minDate?: string;
   locked: boolean;
   limitDays: number | null;
+  canEdit: boolean;
+  canUnlock: boolean;
+  canOpenEntry: boolean;
+  alerts: QtyAlert[];
   departments: Dept[];
   items: Item[];
   mappedPairs: [string, string][];
@@ -53,6 +63,8 @@ export default function ClosingGrid({
   const [value, setValue] = useState(date);
   const [unlockDept, setUnlockDept] = useState<Dept | null>(null);
   const [reason, setReason] = useState("");
+  const [onlyAlerts, setOnlyAlerts] = useState(false);
+  const [activeAlert, setActiveAlert] = useState<QtyAlert | null>(null);
 
   useEffect(() => setValue(date), [date]);
 
@@ -68,6 +80,8 @@ export default function ClosingGrid({
     return m;
   }, [periods, entries]);
 
+  const alertMap = useMemo(() => new Map(alerts.map((a) => [k(a.departmentId, a.itemId), a])), [alerts]);
+  const alertItems = useMemo(() => new Set(alerts.map((a) => a.itemId)), [alerts]);
   const valueOf = (d: string, i: string) => (k(d, i) in edits ? edits[k(d, i)] : saved[k(d, i)] ?? "");
   const dirtyKeys = Object.keys(edits);
 
@@ -93,9 +107,10 @@ export default function ClosingGrid({
     return items.filter(
       (i) =>
         (category === "all" || (i.category || "Uncategorized") === category) &&
+        (!onlyAlerts || alertItems.has(i.id)) &&
         (!s || i.item_name.toLowerCase().includes(s) || i.item_code.toLowerCase().includes(s))
     );
-  }, [items, search, category]);
+  }, [items, search, category, onlyAlerts, alertItems]);
 
   function go(d: string) {
     if (!d) return;
@@ -105,6 +120,7 @@ export default function ClosingGrid({
   }
 
   function friendly(msg: string) {
+    if (msg.includes("PERMISSION_DENIED")) return "You do not have permission for this action.";
     if (msg.includes("ENTRY_LOCKED")) return "This date is locked for your account.";
     if (msg.includes("admin_save_entries")) return "Database update pending. Run the latest 001_entry_lock.sql in Supabase.";
     return msg;
@@ -178,7 +194,7 @@ export default function ClosingGrid({
         title="Closing data"
         subtitle={`All departments · ${fmtWeekday(date)}`}
         actions={
-          !locked && (
+          !locked && canEdit && (
             <Button variant={editing ? "secondary" : "primary"} icon={editing ? "x" : "pencil"} onClick={() => (editing ? (setEdits({}), setEditing(false)) : setEditing(true))}>
               {editing ? "Cancel editing" : "Edit data"}
             </Button>
@@ -217,6 +233,22 @@ export default function ClosingGrid({
           </EmptyState>
         </Card>
       ) : (
+        <>
+        {alerts.length > 0 && (
+          <div className="mb-5">
+            <Notice tone="warning" icon="alert">
+              <p className="font-medium">{alerts.length} big change{alerts.length === 1 ? "" : "s"} found (3× higher or lower than the last closing). Click one to open it.</p>
+              <ul className="mt-2 divide-y divide-amber-100 rounded-xl bg-white/70">
+                {alerts.slice(0, 6).map((a) => (
+                  <li key={a.departmentId + a.itemId}>
+                    <AlertRow a={a} onOpen={setActiveAlert} />
+                  </li>
+                ))}
+                {alerts.length > 6 && <li className="px-3 py-2 text-xs text-slate-500">and {alerts.length - 6} more (tick &quot;Only alerts&quot; below)</li>}
+              </ul>
+            </Notice>
+          </div>
+        )}
         <Card className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-4">
             <div className="relative min-w-0 flex-1 sm:max-w-xs">
@@ -229,6 +261,12 @@ export default function ClosingGrid({
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
+            {alerts.length > 0 && (
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600">
+                <input type="checkbox" checked={onlyAlerts} onChange={(e) => setOnlyAlerts(e.target.checked)} className="h-4 w-4 rounded border-slate-300 text-orange-500 focus:ring-orange-500" />
+                Only alerts ({alerts.length})
+              </label>
+            )}
             {editing && <Badge tone="orange" dot>Editing</Badge>}
           </div>
 
@@ -256,7 +294,7 @@ export default function ClosingGrid({
                         </div>
                         {p?.submitted_at && <p className="mt-1 text-[11px] font-normal text-slate-500">{fmtDateTime(p.submitted_at)}</p>}
                         <div className="mt-2 flex gap-1.5">
-                          {p?.status === "submitted" && (
+                          {canUnlock && p?.status === "submitted" && (
                             <Button size="sm" variant="warning" icon="unlock" onClick={() => setUnlockDept(d)}>Open</Button>
                           )}
                           <Link
@@ -286,8 +324,9 @@ export default function ClosingGrid({
                         const isMapped = mapped.has(k(d.id, i.id));
                         const v = valueOf(d.id, i.id);
                         const dirty = k(d.id, i.id) in edits;
+                        const alert = !dirty ? alertMap.get(k(d.id, i.id)) : undefined;
                         return (
-                          <td key={d.id} className="border-b border-slate-100 px-3 py-1.5 group-hover:bg-slate-50">
+                          <td key={d.id} className={cn("border-b border-slate-100 px-3 py-1.5 group-hover:bg-slate-50", alert && "bg-amber-50")}>
                             {!isMapped ? (
                               <span className="text-slate-300">—</span>
                             ) : editing ? (
@@ -306,6 +345,15 @@ export default function ClosingGrid({
                             ) : (
                               <span className={cn("tabular-nums", v === "" ? "text-slate-300" : "font-medium text-slate-900")}>{v === "" ? "–" : v}</span>
                             )}
+                            {isMapped && alert && (
+                              <button
+                                onClick={() => setActiveAlert(alert)}
+                                title="Big change. Click to open."
+                                className="ml-2 inline-flex items-center gap-1 rounded-md bg-amber-100 px-1.5 py-0.5 align-middle text-[11px] font-semibold text-amber-800 hover:bg-amber-200"
+                              >
+                                <Icon name="alert" size={12} /> {alert.direction === "up" ? "↑" : "↓"} was {alert.previous}
+                              </button>
+                            )}
                           </td>
                         );
                       })}
@@ -318,6 +366,7 @@ export default function ClosingGrid({
             {filtered.length === 0 && <p className="px-5 py-12 text-center text-sm text-slate-400">No items match.</p>}
           </div>
         </Card>
+        </>
       )}
 
       {editing && (
@@ -329,6 +378,8 @@ export default function ClosingGrid({
           </div>
         </div>
       )}
+
+      <AlertDialog alert={activeAlert} date={date} canEdit={canEdit} canUnlock={canUnlock} canOpenEntry={canOpenEntry} onClose={() => setActiveAlert(null)} />
 
       <Modal
         open={!!unlockDept}

@@ -1,9 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
+import { requirePerm } from "@/lib/auth";
 import MappingClient from "./MappingClient";
 
 export const metadata = { title: "Mapping" };
 
 export default async function MappingPage() {
+  await requirePerm("mapping");
   const supabase = await createClient();
   const [items, departments, mappings] = await Promise.all([
     supabase.from("items").select("id, item_code, item_name").eq("is_active", true).order("item_code"),

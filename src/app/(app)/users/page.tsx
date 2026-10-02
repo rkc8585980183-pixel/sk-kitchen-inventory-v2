@@ -1,11 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
-import { getCurrentProfile } from "@/lib/auth";
+import { requirePerm } from "@/lib/auth";
 import UsersClient from "./UsersClient";
 
 export const metadata = { title: "Users" };
 
 export default async function UsersPage() {
-  const profile = await getCurrentProfile();
+  const profile = await requirePerm("users");
   const supabase = await createClient();
 
   const [users, departments] = await Promise.all([

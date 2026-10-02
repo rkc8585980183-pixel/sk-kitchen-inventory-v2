@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { requirePerm } from "@/lib/auth";
 import { fmtDateTime, roleLabel } from "@/lib/utils";
 import { Badge, Card, EmptyState, PageHeader, td, th } from "@/components/ui";
 
@@ -8,6 +9,7 @@ const tone = (a: string) =>
   /unlock/.test(a) ? "amber" : /submit/.test(a) ? "green" : /delete|deactivat/.test(a) ? "red" : /create|add/.test(a) ? "blue" : "slate";
 
 export default async function TrailPage() {
+  await requirePerm("trail");
   const supabase = await createClient();
   const { data: logs } = await supabase
     .from("audit_logs")

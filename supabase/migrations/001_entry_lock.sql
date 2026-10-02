@@ -41,6 +41,8 @@ alter table public.departments add column if not exists back_days int
   check (back_days is null or back_days >= -1);
 alter table public.profiles add column if not exists back_days int
   check (back_days is null or back_days >= -1);
+-- Admin access list (NULL = full access). Managed on the Permissions page.
+alter table public.profiles add column if not exists permissions text[];
 
 -- 2b. Entries are per DATE now: remove the old "a period must be 7 days" rules
 --     (e.g. week_is_7_days) and keep only "end date is not before start date".
@@ -84,6 +86,19 @@ begin
   select back_days into v_dept_days from public.departments where id = v_dept;
   if v_dept_days = -1 then return null; end if;
   return coalesce(v_dept_days, s.default_department_days);
+end $$;
+
+-- 3b. Does this user hold a permission? (Super Admin: always. Admin: NULL list = all.)
+create or replace function public.has_perm(p_user uuid, p_perm text)
+returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare v_role text; v_perms text[];
+begin
+  select role, permissions into v_role, v_perms from public.profiles where id = p_user and is_active;
+  if not found then return false; end if;
+  if v_role = 'super_admin' then return true; end if;
+  if v_role = 'admin' then return v_perms is null or p_perm = any(v_perms); end if;
+  return false;
 end $$;
 
 -- 4. What the app calls for the signed-in user
@@ -258,6 +273,9 @@ begin
   if not found or v_role not in ('admin', 'super_admin') then
     raise exception 'Only Admin or Super Admin can edit closing data';
   end if;
+  if not public.has_perm(v_uid, 'closing_edit') then
+    raise exception 'PERMISSION_DENIED: you do not have permission to edit closing data.' using errcode = 'P0001';
+  end if;
 
   if p_date > v_today then
     raise exception 'ENTRY_LOCKED: future dates cannot be edited.' using errcode = 'P0001';
@@ -296,8 +314,31 @@ begin
   return v_n;
 end $$;
 
+-- 5d. For the quantity alerts (Admin / Super Admin only): the LAST earlier closing of every
+--     department + item that has a quantity on p_date (any gap: a day, a week, a month; up to 1 year back).
+create or replace function public.previous_closings(p_date date)
+returns table (department_id uuid, item_id uuid, prev_quantity numeric, prev_date date)
+language sql stable security definer set search_path = public as $$
+  with cur as (
+    select cp.department_id as dept, ce.item_id as item
+      from public.inventory_periods cp
+      join public.inventory_entries ce on ce.period_id = cp.id
+     where cp.week_start = p_date and cp.week_end = p_date and ce.quantity is not null
+       and public.has_perm(auth.uid(), 'alerts')
+  )
+  select distinct on (c.dept, c.item)
+         c.dept, c.item, e.quantity::numeric, p.week_end::date
+    from cur c
+    join public.inventory_periods p
+      on p.department_id = c.dept and p.week_end < p_date and p.week_end >= p_date - 366
+    join public.inventory_entries e
+      on e.period_id = p.id and e.item_id = c.item and e.quantity is not null
+   order by c.dept, c.item, p.week_end desc;
+$$;
+
 revoke all on function public.entry_window_days(uuid) from public, anon, authenticated;
 revoke all on function public.entry_time_state(uuid) from public, anon, authenticated;
+revoke all on function public.has_perm(uuid, text) from public, anon, authenticated;
 revoke all on function public.assert_entry_time_open(uuid) from public, anon, authenticated;
 revoke all on function public.my_entry_time() from public, anon;
 grant execute on function public.my_entry_time() to authenticated;
@@ -305,10 +346,12 @@ revoke all on function public.my_entry_window() from public, anon;
 revoke all on function public.start_inventory_day(uuid, date) from public, anon;
 revoke all on function public.clear_inventory_entries(uuid, uuid[]) from public, anon;
 revoke all on function public.admin_save_entries(uuid, date, jsonb) from public, anon;
+revoke all on function public.previous_closings(date) from public, anon;
 grant execute on function public.my_entry_window() to authenticated;
 grant execute on function public.start_inventory_day(uuid, date) to authenticated;
 grant execute on function public.clear_inventory_entries(uuid, uuid[]) to authenticated;
 grant execute on function public.admin_save_entries(uuid, date, jsonb) to authenticated;
+grant execute on function public.previous_closings(date) to authenticated;
 
 -- 6. Hard enforcement: block writes to entries outside the allowed window.
 --    (Service role / SQL editor have no auth.uid(), so they are never blocked.)
@@ -350,8 +393,14 @@ create or replace function public.enforce_submit_time()
 returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  if auth.uid() is not null and new.status = 'submitted' and old.status is distinct from 'submitted' then
-    perform public.assert_entry_time_open(auth.uid());
+  if auth.uid() is not null then
+    if new.status = 'submitted' and old.status is distinct from 'submitted' then
+      perform public.assert_entry_time_open(auth.uid());
+    end if;
+    -- reopening a submitted entry needs the "Unlock submitted entries" permission
+    if old.status = 'submitted' and new.status = 'unlocked' and not public.has_perm(auth.uid(), 'entries_unlock') then
+      raise exception 'PERMISSION_DENIED: you do not have permission to unlock entries.' using errcode = 'P0001';
+    end if;
   end if;
   return new;
 end $$;

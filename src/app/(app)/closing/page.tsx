@@ -1,6 +1,7 @@
-import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { getCurrentProfile, isAdmin } from "@/lib/auth";
+import { requirePerm } from "@/lib/auth";
+import { can } from "@/lib/permissions";
+import { getAlerts } from "@/lib/alerts";
 import { getEntryPolicy, isPeriodOpen } from "@/lib/lock";
 import { fetchAll } from "@/lib/fetchAll";
 import { todayIST } from "@/lib/utils";
@@ -9,8 +10,7 @@ import ClosingGrid from "./ClosingGrid";
 export const metadata = { title: "Closing data" };
 
 export default async function ClosingPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
-  const profile = await getCurrentProfile();
-  if (!isAdmin(profile.role)) redirect("/dashboard");
+  const profile = await requirePerm("closing");
 
   const supabase = await createClient();
   const params = await searchParams;
@@ -21,7 +21,8 @@ export default async function ClosingPage({ searchParams }: { searchParams: Prom
   const policy = await getEntryPolicy();
   const open = isPeriodOpen(policy, date);
 
-  const [deptRes, itemRes, mappings] = await Promise.all([
+  const [alerts, deptRes, itemRes, mappings] = await Promise.all([
+    open && can(profile, "alerts") ? getAlerts(date) : Promise.resolve([]),
     supabase.from("departments").select("id, name").eq("is_active", true).order("name"),
     supabase.from("items").select("id, item_code, item_name, category, unit").eq("is_active", true),
     fetchAll<{ item_id: string; department_id: string }>((a, b) =>
@@ -56,6 +57,10 @@ export default async function ClosingPage({ searchParams }: { searchParams: Prom
       minDate={policy.cutoff && policy.cutoff <= today ? policy.cutoff : undefined}
       locked={!open}
       limitDays={policy.limitDays}
+      canEdit={can(profile, "closing_edit")}
+      canUnlock={can(profile, "entries_unlock")}
+      alerts={alerts}
+      canOpenEntry={can(profile, "inventory")}
       departments={deptRes.data ?? []}
       items={items}
       mappedPairs={mappings.map((m) => [m.item_id, m.department_id] as [string, string])}

@@ -1,11 +1,14 @@
 "use client";
 
 import { useDeferredValue, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import PermissionPicker from "@/components/PermissionPicker";
+import { DEFAULT_ADMIN_PERMS } from "@/lib/permissions";
 import Icon from "@/components/Icons";
 import Modal from "@/components/Modal";
 import { useToast } from "@/components/Toast";
-import { Avatar, Badge, Button, Card, EmptyState, Field, inputCls, Notice, PageHeader, selectCls, td, th } from "@/components/ui";
+import { Avatar, Badge, Button, buttonCls, Card, EmptyState, Field, inputCls, Notice, PageHeader, selectCls, td, th } from "@/components/ui";
 import { cn, roleLabel } from "@/lib/utils";
 
 interface UserRow {
@@ -36,6 +39,7 @@ export default function UsersClient({
   const { toast } = useToast();
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(emptyForm(departments[0]?.id || ""));
+  const [newPerms, setNewPerms] = useState<string[]>([...DEFAULT_ADMIN_PERMS]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -69,12 +73,13 @@ export default function UsersClient({
   async function handleCreate() {
     setSaving(true);
     setError(null);
-    const r = await call("POST", form);
+    const r = await call("POST", form.role === "admin" ? { ...form, permissions: newPerms } : form);
     setSaving(false);
     if (!r.ok) return setError(r.error ?? "Could not create user.");
     toast("User created.");
     setCreating(false);
     setForm(emptyForm(departments[0]?.id || ""));
+    setNewPerms([...DEFAULT_ADMIN_PERMS]);
     router.refresh();
   }
 
@@ -142,9 +147,14 @@ export default function UsersClient({
         title="Users"
         subtitle={`${initialUsers.length} users`}
         actions={
-          <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>
-            Create user
-          </Button>
+          <>
+            {currentRole === "super_admin" && (
+              <Link href="/permissions" className={buttonCls("secondary")}>Admin permissions</Link>
+            )}
+            <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>
+              Create user
+            </Button>
+          </>
         }
       />
 
@@ -198,6 +208,7 @@ export default function UsersClient({
         open={creating}
         onClose={() => setCreating(false)}
         title="Create user"
+        size={form.role === "admin" ? "lg" : "md"}
         footer={
           <>
             <Button onClick={() => setCreating(false)}>Cancel</Button>
@@ -222,6 +233,12 @@ export default function UsersClient({
               {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
           </Field>
+        )}
+        {form.role === "admin" && (
+          <div className="rounded-xl border border-slate-200 p-4">
+            <p className="mb-3 text-sm font-medium text-slate-900">What can this admin access?</p>
+            <PermissionPicker value={newPerms} onChange={setNewPerms} />
+          </div>
         )}
         {error && <Notice tone="danger">{error}</Notice>}
       </Modal>

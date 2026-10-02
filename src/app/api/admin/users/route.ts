@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
+import { ALL_PERMS } from "@/lib/permissions";
 
 const ROLES = ["super_admin", "admin", "department_user"];
 const emailOk = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
@@ -15,8 +16,10 @@ async function requireAdmin() {
     data: { user },
   } = await supabase.auth.getUser(); // verified against Auth server: this route uses the service role
   if (!user) return null;
-  const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
+  const { data: profile } = await supabase.from("profiles").select("role, permissions").eq("id", user.id).single();
   if (!profile || !["admin", "super_admin"].includes(profile.role)) return null;
+  // an Admin needs the "Users" permission
+  if (profile.role === "admin" && profile.permissions && !profile.permissions.includes("users")) return null;
   return { id: user.id, role: profile.role as string };
 }
 
@@ -27,7 +30,7 @@ export async function POST(req: NextRequest) {
   if (!caller) return fail("Forbidden", 403);
 
   const body = await req.json();
-  const { username, full_name, email, password, role, department_id } = body;
+  const { username, full_name, email, password, role, department_id, permissions } = body;
 
   if (caller.role === "admin" && role !== "department_user") {
     return fail("Admins can only create department users", 403);
@@ -43,18 +46,23 @@ export async function POST(req: NextRequest) {
     return fail(createErr?.message || "Failed to create auth user");
   }
 
-  const { error: profileErr } = await admin.from("profiles").insert({
+  const row: Record<string, unknown> = {
     id: created.user.id,
     username,
     full_name,
     email,
     role,
     department_id: role === "department_user" ? department_id : null,
-  });
+  };
+  if (role === "admin" && Array.isArray(permissions) && permissions.every((p) => (ALL_PERMS as string[]).includes(p))) {
+    row.permissions = permissions;
+  }
+
+  const { error: profileErr } = await admin.from("profiles").insert(row);
 
   if (profileErr) {
     await admin.auth.admin.deleteUser(created.user.id);
-    return fail(profileErr.message);
+    return fail(/permissions|column/i.test(profileErr.message) ? "Run the latest supabase/migrations/001_entry_lock.sql in Supabase first." : profileErr.message);
   }
 
   return NextResponse.json({ ok: true });

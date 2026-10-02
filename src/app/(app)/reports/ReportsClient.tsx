@@ -24,6 +24,7 @@ export default function ReportsClient({
   items,
   today,
   minDate,
+  canExport,
   rows,
   limitedFrom,
 }: {
@@ -31,6 +32,7 @@ export default function ReportsClient({
   items: { id: string; item_code: string; item_name: string; category: string | null; unit: string; is_active: boolean }[];
   today: string;
   minDate?: string;
+  canExport: boolean;
   rows: Row[];
   limitedFrom: string | null;
 }) {
@@ -124,11 +126,13 @@ export default function ReportsClient({
         title="Reports"
         subtitle={`${filtered.length} records`}
         actions={
+          canExport && (
           <>
             <Button icon="file" onClick={exportExcel} disabled={!tableRows.length}>Excel</Button>
             <Button icon="download" onClick={exportCSV} disabled={!tableRows.length}>CSV</Button>
             <Button icon="download" onClick={exportPDF} disabled={!tableRows.length}>PDF</Button>
           </>
+          )
         }
       />
 
@@ -138,7 +142,7 @@ export default function ReportsClient({
         </div>
       )}
 
-      <ClosingExports departments={departments} items={items} today={today} minDate={minDate} />
+      {canExport && <ClosingExports departments={departments} items={items} today={today} minDate={minDate} />}
 
       <h2 className="mb-3 text-base font-semibold text-slate-900">All entries</h2>
       <Card className="mb-4 p-4">

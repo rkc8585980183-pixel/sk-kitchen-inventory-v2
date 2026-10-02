@@ -1,11 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import { getEntryPolicy } from "@/lib/lock";
+import { requirePerm } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import { fmtDay } from "@/lib/utils";
 import ReportsClient from "./ReportsClient";
 
 export const metadata = { title: "Reports" };
 
 export default async function ReportsPage() {
+  const profile = await requirePerm("reports");
   const supabase = await createClient();
   const policy = await getEntryPolicy();
 
@@ -29,6 +32,7 @@ export default async function ReportsPage() {
     <ReportsClient
       departments={departments.data ?? []}
       items={items.data ?? []}
+      canExport={can(profile, "reports_export")}
       today={policy.today}
       minDate={policy.cutoff && policy.cutoff <= policy.today ? policy.cutoff : undefined}
       rows={(rows.data ?? []) as unknown as React.ComponentProps<typeof ReportsClient>["rows"]}

@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
-import { getCurrentProfile, isAdmin } from "@/lib/auth";
+import { isAdmin, requirePerm } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import { getEntryPolicy, getEntryTime, isPeriodOpen } from "@/lib/lock";
 import { addDays, chipLabel, fmtDay, fmtTime12, fmtWeekday, todayIST } from "@/lib/utils";
 import type { Item, PeriodLite } from "@/types";
@@ -12,9 +13,9 @@ export const metadata = { title: "Inventory" };
 export default async function InventoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ department?: string; date?: string }>;
+  searchParams: Promise<{ department?: string; date?: string; item?: string }>;
 }) {
-  const profile = await getCurrentProfile();
+  const profile = await requirePerm("inventory");
   const supabase = await createClient();
   const params = await searchParams;
   const admin = isAdmin(profile.role);
@@ -179,7 +180,8 @@ export default async function InventoryPage({
           items={items}
           initialEntries={entries}
           canEdit={period.status !== "submitted"}
-          canUnlock={admin}
+          canUnlock={can(profile, "entries_unlock")}
+          focusItemId={params.item}
         />
       )}
     </div>

@@ -2,6 +2,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Profile } from "@/types";
+import { can, landingPath, type PermKey } from "@/lib/permissions";
 
 /**
  * Cached per request: layout + page share ONE profile lookup.
@@ -22,4 +23,11 @@ export const getCurrentProfile = cache(async (): Promise<Profile> => {
 
 export function isAdmin(role: string) {
   return role === "admin" || role === "super_admin";
+}
+
+/** Use at the top of a page: sends the user to a page they may open when they lack the permission. */
+export async function requirePerm(key: PermKey): Promise<Profile> {
+  const profile = await getCurrentProfile();
+  if (!can(profile, key)) redirect(landingPath(profile));
+  return profile;
 }

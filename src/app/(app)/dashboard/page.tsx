@@ -1,15 +1,18 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
-import { getCurrentProfile, isAdmin } from "@/lib/auth";
+import { isAdmin, requirePerm } from "@/lib/auth";
+import { can } from "@/lib/permissions";
 import { getEntryPolicy, getEntryTime } from "@/lib/lock";
 import { fmtDateTime, fmtTime12, fmtWeekday, todayIST } from "@/lib/utils";
 import Icon, { type IconName } from "@/components/Icons";
-import { buttonCls, Card, Notice, PageHeader, ProgressBar, StatusBadge } from "@/components/ui";
+import { buttonCls, Card, Notice, PageHeader, ProgressBar, Skeleton, StatusBadge } from "@/components/ui";
+import AlertsCard from "./AlertsCard";
 
 export const metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
-  const profile = await getCurrentProfile();
+  const profile = await requirePerm("dashboard");
   const supabase = await createClient();
   const admin = isAdmin(profile.role);
   const today = todayIST();
@@ -47,7 +50,7 @@ export default async function DashboardPage() {
         subtitle={`Today: ${fmtWeekday(today)}`}
         actions={
           <>
-            {admin && (
+            {admin && can(profile, "closing") && (
               <Link href="/closing" className={buttonCls("secondary")}>
                 <Icon name="table" size={16} /> Edit closing data
               </Link>
@@ -78,6 +81,18 @@ export default async function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {admin && can(profile, "alerts") && (
+        <Suspense fallback={<Card className="p-5"><Skeleton className="h-5 w-40" /><Skeleton className="mt-4 h-4 w-full" /></Card>}>
+          <AlertsCard
+            date={today}
+            canReview={can(profile, "closing")}
+            canEdit={can(profile, "closing_edit")}
+            canUnlock={can(profile, "entries_unlock")}
+            canOpenEntry={can(profile, "inventory")}
+          />
+        </Suspense>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">

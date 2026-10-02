@@ -16,16 +16,18 @@ const ItemRow = memo(function ItemRow({
   value,
   disabled,
   dirty,
+  focus,
   onChange,
 }: {
   item: Item;
   value: string;
   disabled: boolean;
   dirty: boolean;
+  focus: boolean;
   onChange: (id: string, v: string) => void;
 }) {
   return (
-    <tr className="hover:bg-slate-50/60">
+    <tr id={`item-${item.id}`} className={cn("hover:bg-slate-50/60", focus && "bg-amber-50 ring-2 ring-inset ring-amber-300")}>
       <td className="hidden px-4 py-2.5 font-mono text-xs text-slate-500 md:table-cell">{item.item_code}</td>
       <td className="px-4 py-2.5">
         <p className="text-sm font-medium text-slate-900">{item.item_name}</p>
@@ -73,12 +75,14 @@ export default function InventoryForm({
   initialEntries,
   canEdit,
   canUnlock,
+  focusItemId,
 }: {
   period: PeriodLite;
   items: Item[];
   initialEntries: { item_id: string; quantity: number | null }[];
   canEdit: boolean;
   canUnlock: boolean;
+  focusItemId?: string;
 }) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
@@ -113,7 +117,13 @@ export default function InventoryForm({
 
   const itemIds = useMemo(() => items.map((i) => i.id), [items]);
 
+  // coming from a "Big change" alert: scroll to that item
+  useEffect(() => {
+    if (focusItemId) document.getElementById(`item-${focusItemId}`)?.scrollIntoView({ block: "center" });
+  }, [focusItemId]);
+
   function friendly(msg: string) {
+    if (msg.includes("PERMISSION_DENIED")) return "You do not have permission for this action.";
     if (msg.includes("ENTRY_CLOSED")) return "Entry time is over. Changes are not saved now.";
     if (msg.includes("ENTRY_LOCKED")) return "This date is locked. Contact the Super Admin.";
     if (msg.includes("ENTRY_SUBMITTED")) return "This entry is already submitted and locked.";
@@ -352,7 +362,7 @@ export default function InventoryForm({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((i) => (
-                <ItemRow key={i.id} item={i} value={quantities[i.id] ?? ""} disabled={!canEdit} dirty={dirtySet.has(i.id)} onChange={onChange} />
+                <ItemRow key={i.id} item={i} value={quantities[i.id] ?? ""} disabled={!canEdit} dirty={dirtySet.has(i.id)} focus={i.id === focusItemId} onChange={onChange} />
               ))}
             </tbody>
           </table>

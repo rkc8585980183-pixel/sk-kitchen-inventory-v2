@@ -10,6 +10,8 @@ export interface Profile {
   is_active: boolean;
   /** Entry-lock window override (admins). null = default, -1 = no limit */
   back_days?: number | null;
+  /** Admin access list. null/undefined = full access (see lib/permissions.ts) */
+  permissions?: string[] | null;
 }
 
 export interface Department {
