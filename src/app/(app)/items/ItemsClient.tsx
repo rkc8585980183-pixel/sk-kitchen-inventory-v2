@@ -202,7 +202,9 @@ export default function ItemsClient({
         else if (itemId) mappings.push({ item_id: itemId, department_id: deptId });
       }
       for (const batch of chunk(mappings, 500)) {
-        const { error } = await supabase.from("item_mappings").upsert(batch, { onConflict: "item_id,department_id" });
+        // Insert only the missing mappings. "ignoreDuplicates" = ON CONFLICT DO NOTHING, so existing
+        // mappings are left alone and no UPDATE permission is needed on item_mappings.
+        const { error } = await supabase.from("item_mappings").upsert(batch, { onConflict: "item_id,department_id", ignoreDuplicates: true });
         if (error) errs.push(`Mapping error: ${error.message}`);
       }
 
