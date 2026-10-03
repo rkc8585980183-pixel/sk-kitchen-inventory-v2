@@ -192,22 +192,43 @@ export default function ItemsClient({
         });
       }
 
-      // mappings: one batched upsert
-      const mappings: { item_id: string; department_id: string }[] = [];
-      for (const r of all) {
-        if (!r.department) continue;
-        const deptId = deptMap.get(r.department.toLowerCase());
-        const itemId = idByCode.get(r.code);
-        if (!deptId) errs.push(`${r.code}: department "${r.department}" not found`);
-        else if (itemId) mappings.push({ item_id: itemId, department_id: deptId });
-      }
-      for (const batch of chunk(mappings, 500)) {
-        // Insert only the missing mappings. "ignoreDuplicates" = ON CONFLICT DO NOTHING, so existing
-        // mappings are left alone and no UPDATE permission is needed on item_mappings.
-        const { error } = await supabase.from("item_mappings").upsert(batch, { onConflict: "item_id,department_id", ignoreDuplicates: true });
-        if (error) errs.push(`Mapping error: ${error.message}`);
-      }
+      // Replace department mappings from Excel
+for (const r of all) {
+  if (!r.department) continue;
 
+  const itemId = idByCode.get(r.code);
+  const deptId = deptMap.get(r.department.toLowerCase());
+
+  if (!deptId) {
+    errs.push(`${r.code}: department "${r.department}" not found`);
+    continue;
+  }
+
+  if (!itemId) continue;
+
+  // Remove existing department mapping for this item
+  const { error: deleteError } = await supabase
+    .from("item_mappings")
+    .delete()
+    .eq("item_id", itemId);
+
+  if (deleteError) {
+    errs.push(`${r.code}: failed to remove old department mapping - ${deleteError.message}`);
+    continue;
+  }
+
+  // Add new department mapping
+  const { error: insertError } = await supabase
+    .from("item_mappings")
+    .insert({
+      item_id: itemId,
+      department_id: deptId,
+    });
+
+  if (insertError) {
+    errs.push(`${r.code}: failed to map department - ${insertError.message}`);
+  }
+}
       setSummary(`Created ${created} · Updated ${updated} · Skipped ${skipped}${errs.length ? ` · ${errs.length} issue(s)` : ""}`);
       toast("Upload finished.");
       router.refresh();
