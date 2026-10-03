@@ -57,7 +57,7 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && <Notice tone="danger">{error}</Notice>}
           <Field label="Email">
-            <input type="email" required autoComplete="username" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} placeholder="name@company.com" />
+            <input type="email" required autoComplete="username" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} className={inputCls} placeholder="Enter Your email" />
           </Field>
           <Field label="Password">
             <div className="relative">
