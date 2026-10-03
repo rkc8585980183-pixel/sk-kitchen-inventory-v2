@@ -21,6 +21,13 @@ export default async function SettingsPage() {
     <SettingsClient
       ready={!!settings.data}
       today={todayIST()}
+      closing={{
+        mode: settings.data?.closing_mode ?? "off",
+        time: String(settings.data?.closing_time ?? "23:00").slice(0, 5),
+        weekday: settings.data?.closing_weekday ?? 0,
+        monthRule: settings.data?.closing_month_rule ?? "month_end",
+        monthDay: settings.data?.closing_month_day ?? 1,
+      }}
       time={{
         enabled: settings.data?.time_lock_enabled ?? false,
         open: String(settings.data?.entry_open_time ?? "00:00").slice(0, 5),

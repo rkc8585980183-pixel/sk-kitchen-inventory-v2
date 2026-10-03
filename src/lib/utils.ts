@@ -73,3 +73,8 @@ export function fmtTime12(t: string): string {
   const [h, m] = t.split(":").map(Number);
   return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
 }
+
+/** Current India time as "HH:MM" (24 hour). */
+export function nowHHMM(): string {
+  return new Date().toLocaleTimeString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+}

@@ -30,6 +30,20 @@ alter table public.lock_settings add column if not exists time_lock_enabled bool
 alter table public.lock_settings add column if not exists entry_open_time  time not null default '00:00';
 alter table public.lock_settings add column if not exists entry_close_time time not null default '23:59';
 
+-- Closing schedule (set by the Admin on the Settings page; departments only read it)
+alter table public.lock_settings add column if not exists closing_mode text not null default 'off';
+alter table public.lock_settings add column if not exists closing_time time not null default '23:00';
+alter table public.lock_settings add column if not exists closing_weekday int not null default 0;
+alter table public.lock_settings add column if not exists closing_month_rule text not null default 'month_end';
+alter table public.lock_settings add column if not exists closing_month_day int not null default 1;
+alter table public.lock_settings drop constraint if exists lock_settings_closing_chk;
+alter table public.lock_settings add constraint lock_settings_closing_chk check (
+  closing_mode in ('off', 'daily', 'weekly', 'monthly')
+  and closing_weekday between 0 and 6
+  and closing_month_rule in ('month_end', 'day')
+  and closing_month_day between 1 and 31
+);
+
 alter table public.lock_settings enable row level security;
 drop policy if exists lock_settings_read on public.lock_settings;
 create policy lock_settings_read on public.lock_settings

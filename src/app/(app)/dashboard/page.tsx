@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { createClient } from "@/lib/supabase/server";
 import { isAdmin, requirePerm } from "@/lib/auth";
@@ -13,6 +14,8 @@ export const metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
   const profile = await requirePerm("dashboard");
+  // The department panel is a single page: the closing entry.
+  if (profile.role === "department_user") redirect("/inventory");
   const supabase = await createClient();
   const admin = isAdmin(profile.role);
   const today = todayIST();

@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { addDays, cn, fmtDay, fmtTime12 } from "@/lib/utils";
+import { addDays, cn, fmtDay, fmtTime12, fmtWeekday } from "@/lib/utils";
+import { describeSchedule, isClosingDate, nextClosingAfter, WEEKDAYS, type ClosingMode, type ClosingSchedule } from "@/lib/closingSchedule";
 import Icon from "@/components/Icons";
 import { useToast } from "@/components/Toast";
 import { Badge, Button, Card, EmptyState, Field, inputCls, Notice, PageHeader } from "@/components/ui";
@@ -87,6 +88,7 @@ function LimitRow({
 export default function SettingsClient({
   ready,
   today,
+  closing,
   time,
   settings,
   departments,
@@ -94,6 +96,7 @@ export default function SettingsClient({
 }: {
   ready: boolean;
   today: string;
+  closing: ClosingSchedule;
   time: { enabled: boolean; open: string; close: string };
   settings: { enabled: boolean; default_department_days: number; default_admin_days: number };
   departments: Target[];
@@ -110,14 +113,19 @@ export default function SettingsClient({
   const [adminL, setAdminL] = useState<Record<string, Limit>>(() =>
     Object.fromEntries(admins.map((a) => [a.id, toLimit(a.back_days, settings.default_admin_days)]))
   );
+  const [cMode, setCMode] = useState<ClosingMode>(closing.mode);
+  const [cTime, setCTime] = useState(closing.time);
+  const [cWeekday, setCWeekday] = useState(closing.weekday);
+  const [cRule, setCRule] = useState<"month_end" | "day">(closing.monthRule);
+  const [cDay, setCDay] = useState(closing.monthDay);
   const [timeOn, setTimeOn] = useState(time.enabled);
   const [openT, setOpenT] = useState(time.open);
   const [closeT, setCloseT] = useState(time.close);
   const [saving, setSaving] = useState(false);
 
   // Snapshot of what is saved, to detect changes.
-  const [baseline, setBaseline] = useState(() => JSON.stringify({ enabled, defDept, defAdmin, deptL, adminL, timeOn, openT, closeT }));
-  const current = JSON.stringify({ enabled, defDept, defAdmin, deptL, adminL, timeOn, openT, closeT });
+  const [baseline, setBaseline] = useState(() => JSON.stringify({ enabled, defDept, defAdmin, deptL, adminL, timeOn, openT, closeT, cMode, cTime, cWeekday, cRule, cDay }));
+  const current = JSON.stringify({ enabled, defDept, defAdmin, deptL, adminL, timeOn, openT, closeT, cMode, cTime, cWeekday, cRule, cDay });
   const dirty = current !== baseline;
 
   const changedList = useMemo(() => {
@@ -138,6 +146,11 @@ export default function SettingsClient({
         enabled,
         default_department_days: defDept,
         default_admin_days: defAdmin,
+        closing_mode: cMode,
+        closing_time: cTime,
+        closing_weekday: cWeekday,
+        closing_month_rule: cRule,
+        closing_month_day: cDay,
         time_lock_enabled: timeOn,
         entry_open_time: openT,
         entry_close_time: closeT,
@@ -169,6 +182,87 @@ export default function SettingsClient({
           </Notice>
         </div>
       )}
+
+      <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Closing schedule</p>
+      <Card className="mb-8 p-5">
+        <h2 className="font-semibold text-slate-900">Closing manager</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Choose when departments must enter their closing stock. Departments only see the dates that match this schedule and cannot change it.
+        </p>
+
+        <div className="mt-4 inline-flex flex-wrap rounded-xl bg-slate-100 p-1" role="group" aria-label="Closing type">
+          {([["off", "Off"], ["daily", "Daily"], ["weekly", "Weekly"], ["monthly", "Monthly"]] as const).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => setCMode(m)}
+              className={cn(
+                "rounded-lg px-4 py-1.5 text-sm font-medium transition",
+                cMode === m ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {cMode !== "off" && (
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Field label="Closing time (India time)" hint="The closing entry opens at this time on the closing date.">
+              <input type="time" value={cTime} onChange={(e) => e.target.value && setCTime(e.target.value)} className={inputCls} />
+            </Field>
+            {cMode === "weekly" && (
+              <Field label="Closing day" hint="Repeats automatically every week.">
+                <select value={cWeekday} onChange={(e) => setCWeekday(parseInt(e.target.value, 10))} className={inputCls + " pr-8"}>
+                  {WEEKDAYS.map((d, i) => (
+                    <option key={d} value={i}>{d}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            {cMode === "monthly" && (
+              <>
+                <Field label="Monthly rule" hint="Repeats automatically every month.">
+                  <select value={cRule} onChange={(e) => setCRule(e.target.value as "month_end" | "day")} className={inputCls + " pr-8"}>
+                    <option value="month_end">Last day of the month</option>
+                    <option value="day">A fixed day of the month</option>
+                  </select>
+                </Field>
+                {cRule === "day" && (
+                  <Field label="Day of the month" hint="A short month uses its last day.">
+                    <input type="number" min={1} max={31} value={cDay} onChange={(e) => setCDay(Math.max(1, Math.min(31, parseInt(e.target.value, 10) || 1)))} className={inputCls} />
+                  </Field>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        <p className="mt-4 text-xs text-slate-500">
+          {(() => {
+            if (cMode === "off") return "Closing schedule is OFF: departments can enter any day (inside the entry lock days).";
+            const sc: ClosingSchedule = { mode: cMode, time: cTime, weekday: cWeekday, monthRule: cRule, monthDay: cDay };
+            const next = isClosingDate(sc, today) ? today : nextClosingAfter(sc, today);
+            return `${describeSchedule(sc)}. ${next ? `Next closing: ${fmtWeekday(next)}.` : ""}`;
+          })()}
+        </p>
+        {cMode !== "off" && (() => {
+          const sc: ClosingSchedule = { mode: cMode, time: cTime, weekday: cWeekday, monthRule: cRule, monthDay: cDay };
+          const list: string[] = [];
+          let d = isClosingDate(sc, today) ? today : nextClosingAfter(sc, today);
+          while (d && list.length < 5) {
+            list.push(d);
+            d = nextClosingAfter(sc, d);
+          }
+          return (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-slate-500">Upcoming closings:</span>
+              {list.map((x) => (
+                <Badge key={x} tone="blue">{fmtWeekday(x)}</Badge>
+              ))}
+            </div>
+          );
+        })()}
+      </Card>
 
       <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Entry time</p>
       <Card className="mb-8 p-5">
@@ -296,7 +390,7 @@ export default function SettingsClient({
         <div className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:left-64">
           <div className="mx-auto flex max-w-6xl items-center justify-end gap-3 sm:px-4 lg:px-4">
             <span className="text-sm text-slate-500">You have unsaved changes</span>
-            <Button onClick={() => { const b = JSON.parse(baseline); setEnabled(b.enabled); setDefDept(b.defDept); setDefAdmin(b.defAdmin); setDeptL(b.deptL); setAdminL(b.adminL); setTimeOn(b.timeOn); setOpenT(b.openT); setCloseT(b.closeT); }}>Discard</Button>
+            <Button onClick={() => { const b = JSON.parse(baseline); setEnabled(b.enabled); setDefDept(b.defDept); setDefAdmin(b.defAdmin); setDeptL(b.deptL); setAdminL(b.adminL); setTimeOn(b.timeOn); setOpenT(b.openT); setCloseT(b.closeT); setCMode(b.cMode); setCTime(b.cTime); setCWeekday(b.cWeekday); setCRule(b.cRule); setCDay(b.cDay); }}>Discard</Button>
             <Button variant="primary" loading={saving} disabled={!ready} onClick={save}>Save changes</Button>
           </div>
         </div>

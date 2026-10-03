@@ -32,10 +32,15 @@ export async function PUT(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "Invalid request." }, { status: 400 });
 
-  const { enabled, default_department_days, default_admin_days, time_lock_enabled, entry_open_time, entry_close_time, departments = [], admins = [] } = body;
+  const { enabled, default_department_days, default_admin_days, time_lock_enabled, entry_open_time, entry_close_time, closing_mode, closing_time, closing_weekday, closing_month_rule, closing_month_day, departments = [], admins = [] } = body;
   if (
     typeof enabled !== "boolean" ||
     typeof time_lock_enabled !== "boolean" ||
+    !(["off", "daily", "weekly", "monthly"] as unknown[]).includes(closing_mode) ||
+    !validTime(closing_time) ||
+    !Number.isInteger(closing_weekday) || closing_weekday < 0 || closing_weekday > 6 ||
+    !(["month_end", "day"] as unknown[]).includes(closing_month_rule) ||
+    !Number.isInteger(closing_month_day) || closing_month_day < 1 || closing_month_day > 31 ||
     !validTime(entry_open_time) ||
     !validTime(entry_close_time) ||
     !validDays(default_department_days) ||
@@ -56,6 +61,11 @@ export async function PUT(req: NextRequest) {
     time_lock_enabled,
     entry_open_time,
     entry_close_time,
+    closing_mode,
+    closing_time,
+    closing_weekday,
+    closing_month_rule,
+    closing_month_day,
     updated_at: new Date().toISOString(),
     updated_by: caller.id,
   });

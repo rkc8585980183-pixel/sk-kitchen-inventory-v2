@@ -17,6 +17,7 @@ const ItemRow = memo(function ItemRow({
   disabled,
   dirty,
   focus,
+  large,
   onChange,
 }: {
   item: Item;
@@ -24,13 +25,14 @@ const ItemRow = memo(function ItemRow({
   disabled: boolean;
   dirty: boolean;
   focus: boolean;
+  large: boolean;
   onChange: (id: string, v: string) => void;
 }) {
   return (
     <tr id={`item-${item.id}`} className={cn("hover:bg-slate-50/60", focus && "bg-amber-50 ring-2 ring-inset ring-amber-300")}>
       <td className="hidden px-4 py-2.5 font-mono text-xs text-slate-500 md:table-cell">{item.item_code}</td>
       <td className="px-4 py-2.5">
-        <p className="text-sm font-medium text-slate-900">{item.item_name}</p>
+        <p className={cn("font-medium text-slate-900", large ? "text-base" : "text-sm")}>{item.item_name}</p>
         <p className="text-xs text-slate-500 md:hidden">
           {item.item_code}
           {item.category ? ` · ${item.category}` : ""}
@@ -52,13 +54,20 @@ const ItemRow = memo(function ItemRow({
             aria-label={`Quantity for ${item.item_name}`}
             onWheel={(e) => e.currentTarget.blur()}
             onChange={(e) => onChange(item.id, e.target.value)}
+            onFocus={large ? (e) => e.currentTarget.select() : undefined}
             onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
+              const key = e.key;
+              if (key !== "Enter" && !(large && (key === "ArrowDown" || key === "ArrowUp"))) return;
               e.preventDefault();
               const all = Array.from(document.querySelectorAll<HTMLInputElement>("input[data-qty]:not(:disabled)"));
-              all[all.indexOf(e.currentTarget) + 1]?.focus();
+              const at = all.indexOf(e.currentTarget);
+              all[key === "ArrowUp" ? at - 1 : at + 1]?.focus();
             }}
-            className={cn(inputCls, "w-24 text-right tabular-nums sm:w-28", dirty && "border-orange-400 bg-orange-50/40")}
+            className={cn(
+              inputCls,
+              large ? "!h-12 w-32 text-right text-lg font-semibold tabular-nums sm:w-40" : "w-24 text-right tabular-nums sm:w-28",
+              dirty && "border-orange-400 bg-orange-50/40"
+            )}
           />
           <span className="w-9 text-xs font-medium uppercase text-slate-500 md:hidden">{item.unit}</span>
         </div>
@@ -76,6 +85,7 @@ export default function InventoryForm({
   canEdit,
   canUnlock,
   focusItemId,
+  variant = "admin",
 }: {
   period: PeriodLite;
   items: Item[];
@@ -83,7 +93,9 @@ export default function InventoryForm({
   canEdit: boolean;
   canUnlock: boolean;
   focusItemId?: string;
+  variant?: "admin" | "department";
 }) {
+  const large = variant === "department";
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
   const { toast } = useToast();
@@ -241,6 +253,10 @@ export default function InventoryForm({
     );
   }, [items, search, category]);
 
+  async function handleSaveDraft() {
+    if (await flush()) toast("Draft saved.");
+  }
+
   async function handleSubmit() {
     setConfirmSubmit(false);
     setSubmitting(true);
@@ -321,11 +337,11 @@ export default function InventoryForm({
                 placeholder="Search item or code"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className={cn(inputCls, "pl-9")}
+                className={cn(inputCls, "pl-9", large && "!h-12 text-base")}
                 aria-label="Search items"
               />
             </div>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className={cn(selectCls, "w-full sm:w-52")} aria-label="Filter by category">
+            <select value={category} onChange={(e) => setCategory(e.target.value)} className={cn(selectCls, "w-full sm:w-52", large && "!h-12 text-base")} aria-label="Filter by category">
               <option value="all">All categories</option>
               {categories.map((c) => (
                 <option key={c} value={c}>
@@ -342,27 +358,26 @@ export default function InventoryForm({
             <div className="flex-1">
               <ProgressBar value={entered} max={items.length} tone={entered === items.length && items.length > 0 ? "green" : "orange"} />
             </div>
-            <span className="text-xs font-medium tabular-nums text-slate-500">
+            <span className={cn("font-medium tabular-nums text-slate-500", large ? "text-sm" : "text-xs")}>
               {entered}/{items.length} entered
             </span>
           </div>
         </div>
 
         {/* items table */}
-        <div className="overflow-x-auto">
+        <div className={cn("overflow-x-auto", large && "md:max-h-[62vh] md:overflow-y-auto")}>
           <table className="w-full">
             <thead className="hidden bg-slate-50/70 md:table-header-group">
               <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
-                <th className="px-4 py-3">Code</th>
-                <th className="px-4 py-3">Item</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Unit</th>
-                <th className="px-4 py-3 text-right">Quantity</th>
+                {["Code", "Item", "Category", "Unit"].map((h) => (
+                  <th key={h} className={cn("px-4 py-3", large && "sticky top-0 z-10 bg-slate-50")}>{h}</th>
+                ))}
+                <th className={cn("px-4 py-3 text-right", large && "sticky top-0 z-10 bg-slate-50")}>Quantity</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((i) => (
-                <ItemRow key={i.id} item={i} value={quantities[i.id] ?? ""} disabled={!canEdit} dirty={dirtySet.has(i.id)} focus={i.id === focusItemId} onChange={onChange} />
+                <ItemRow key={i.id} item={i} value={quantities[i.id] ?? ""} disabled={!canEdit} dirty={dirtySet.has(i.id)} focus={i.id === focusItemId} large={large} onChange={onChange} />
               ))}
             </tbody>
           </table>
@@ -396,11 +411,16 @@ export default function InventoryForm({
           <div className="ml-auto flex gap-2">
             {canEdit ? (
               <>
-              <Button variant="danger" icon="trash" loading={clearing} disabled={submitting || (entered === 0 && !hasSaved)} onClick={() => setConfirmClear(true)}>
+              {large && (
+                <Button className="!h-12 !px-5 !text-base" icon="check" disabled={submitting || status === "saving" || dirtyIds.length === 0} onClick={handleSaveDraft}>
+                  Save draft
+                </Button>
+              )}
+              <Button className={large ? "!h-12 !px-5 !text-base" : undefined} variant="danger" icon="trash" loading={clearing} disabled={submitting || (entered === 0 && !hasSaved)} onClick={() => setConfirmClear(true)}>
                 Clear all
               </Button>
-              <Button variant="primary" icon="check" loading={submitting} disabled={status === "saving" || items.length === 0} onClick={() => setConfirmSubmit(true)}>
-                Submit
+              <Button className={large ? "!h-12 !px-6 !text-base" : undefined} variant="primary" icon="check" loading={submitting} disabled={status === "saving" || items.length === 0} onClick={() => setConfirmSubmit(true)}>
+                {large ? "Submit Closing Stock" : "Submit"}
               </Button>
               </>
             ) : canUnlock ? (

@@ -44,5 +44,6 @@ const LANDING: [PermKey, string][] = [
 
 /** First page this user is allowed to open. */
 export function landingPath(p: Pick<Profile, "role" | "permissions">): string {
+  if (p.role === "department_user") return "/inventory";
   return LANDING.find(([k]) => can(p, k))?.[1] ?? "/no-access";
 }
