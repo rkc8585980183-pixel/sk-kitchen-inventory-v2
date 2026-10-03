@@ -83,10 +83,14 @@ export default async function InventoryPage({
       }
     }
   }
-  const frame = (content: React.ReactNode) => (
+  // Header + date bar are frozen on tablet / desktop (on phones only the date bar stays, to keep space).
+  const frame = (content: React.ReactNode, bar?: React.ReactNode) => (
     <>
-      <DeptHeader deptName={deptName} userName={profile.full_name} pills={pills} />
-      <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6">{content}</div>
+      <div className="contents md:sticky md:top-0 md:z-40 md:block md:shadow-md">
+        <DeptHeader deptName={deptName} userName={profile.full_name} pills={pills} />
+        {bar}
+      </div>
+      <div className="mx-auto max-w-6xl space-y-3 px-4 py-3 sm:px-6">{content}</div>
     </>
   );
 
@@ -239,44 +243,36 @@ export default async function InventoryPage({
     ) : null;
 
     return frame(
-      <>
-        {scheduleOn && !notScheduled && (
-          <Notice tone="info" icon="calendar">
-            Closing required for <b>{fmtWeekday(date)}</b> · {describeSchedule(schedule)}
-          </Notice>
-        )}
-
-        <InventoryFilters
-          variant="department"
-          departments={[]}
-          selectedDepartment={departmentId}
-          showDepartments={false}
-          date={date}
-          min={minDate}
-          max={today}
-          recent={chipDates.map((d) => ({
-            date: d,
-            label: chipLabel(d, today),
-            status: statusMap.get(d) ?? null,
-            scheduled: scheduleOn ? isClosingDate(schedule, d) : true,
-            disabled: !!policy.cutoff && d < policy.cutoff,
-          }))}
-        />
-
-        {stateCard ??
-          (period && (
-            <InventoryForm
-              key={period.id}
-              variant="department"
-              period={period}
-              items={items}
-              initialEntries={entries}
-              canEdit={period.status !== "submitted"}
-              canUnlock={false}
-              focusItemId={params.item}
-            />
-          ))}
-      </>
+      stateCard ??
+        (period && (
+          <InventoryForm
+            key={period.id}
+            variant="department"
+            period={period}
+            items={items}
+            initialEntries={entries}
+            canEdit={period.status !== "submitted"}
+            canUnlock={false}
+            focusItemId={params.item}
+          />
+        )),
+      <InventoryFilters
+        variant="department"
+        departments={[]}
+        selectedDepartment={departmentId}
+        showDepartments={false}
+        date={date}
+        min={minDate}
+        max={today}
+        closingNote={scheduleOn && !notScheduled ? `Closing required · ${describeSchedule(schedule)}` : undefined}
+        recent={chipDates.map((d) => ({
+          date: d,
+          label: chipLabel(d, today),
+          status: statusMap.get(d) ?? null,
+          scheduled: scheduleOn ? isClosingDate(schedule, d) : true,
+          disabled: !!policy.cutoff && d < policy.cutoff,
+        }))}
+      />
     );
   }
 

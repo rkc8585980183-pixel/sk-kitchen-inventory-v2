@@ -327,9 +327,9 @@ export default function InventoryForm({
         </Notice>
       )}
 
-      <Card className="overflow-hidden">
+      <Card className={large ? undefined : "overflow-hidden"}>
         {/* toolbar */}
-        <div className="space-y-4 border-b border-slate-100 p-4 sm:p-5">
+        <div className={cn("space-y-4 border-b border-slate-100 p-4 sm:p-5", large && "space-y-2 !p-3")}>
           <div className="flex flex-wrap items-center gap-3">
             <div className="relative min-w-0 flex-1 sm:max-w-xs">
               <Icon name="search" size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -337,11 +337,11 @@ export default function InventoryForm({
                 placeholder="Search item or code"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className={cn(inputCls, "pl-9", large && "!h-12 text-base")}
+                className={cn(inputCls, "pl-9", large && "!h-10")}
                 aria-label="Search items"
               />
             </div>
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className={cn(selectCls, "w-full sm:w-52", large && "!h-12 text-base")} aria-label="Filter by category">
+            <select value={category} onChange={(e) => setCategory(e.target.value)} className={cn(selectCls, "w-full sm:w-52", large && "!h-10")} aria-label="Filter by category">
               <option value="all">All categories</option>
               {categories.map((c) => (
                 <option key={c} value={c}>
@@ -365,7 +365,7 @@ export default function InventoryForm({
         </div>
 
         {/* items table */}
-        <div className={cn("overflow-x-auto", large && "md:max-h-[62vh] md:overflow-y-auto")}>
+        <div className={cn("overflow-x-auto", large && "md:max-h-[calc(100vh-19.5rem)] md:overflow-y-auto")}>
           <table className="w-full">
             <thead className="hidden bg-slate-50/70 md:table-header-group">
               <tr className="text-left text-xs font-medium uppercase tracking-wide text-slate-500">
