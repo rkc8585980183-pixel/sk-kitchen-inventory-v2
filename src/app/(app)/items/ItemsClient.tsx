@@ -1,3 +1,207 @@
+"use client";
+
+import { useDeferredValue, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import type { Item } from "@/types";
+import Icon from "@/components/Icons";
+import Modal from "@/components/Modal";
+import { useToast } from "@/components/Toast";
+import { Badge, Button, buttonCls, Card, EmptyState, Field, inputCls, Notice, PageHeader, selectCls, td, th } from "@/components/ui";
+import { cn } from "@/lib/utils";
+import { groupUploadRows } from "@/lib/itemUpload";
+
+const chunk = <T,>(arr: T[], n: number) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
+
+export default function ItemsClient({
+  initialItems,
+  units,
+  canDelete,
+}: {
+  initialItems: Item[];
+  units: string[];
+  canDelete: boolean;
+}) {
+  const router = useRouter();
+  const supabase = useMemo(() => createClient(), []);
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const deferred = useDeferredValue(search);
+  const [editing, setEditing] = useState<Partial<Item> | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const filtered = useMemo(() => {
+    const s = deferred.trim().toLowerCase();
+    if (!s) return initialItems;
+    return initialItems.filter((i) => i.item_name.toLowerCase().includes(s) || i.item_code.toLowerCase().includes(s));
+  }, [initialItems, deferred]);
+
+  async function saveItem() {
+    if (!editing?.item_code || !editing.item_name || !editing.unit) {
+      toast("Item code, name and unit are required.", "error");
+      return;
+    }
+    setSaving(true);
+    const payload = {
+      item_code: editing.item_code.trim().toUpperCase(),
+      item_name: editing.item_name.trim(),
+      category: editing.category?.trim() || null,
+      unit: editing.unit,
+    };
+    const { error } = editing.id
+      ? await supabase.from("items").update(payload).eq("id", editing.id)
+      : await supabase.from("items").insert(payload);
+    setSaving(false);
+    if (error) {
+      toast(error.message, "error");
+      return;
+    }
+    toast(editing.id ? "Item updated." : "Item added.");
+    setEditing(null);
+    router.refresh();
+  }
+
+  async function toggleActive(item: Item) {
+    const { error } = await supabase.from("items").update({ is_active: !item.is_active }).eq("id", item.id);
+    if (error) return toast(error.message, "error");
+    toast(item.is_active ? "Item deactivated." : "Item activated.");
+    router.refresh();
+  }
+
+  // xlsx is ~400 KB: load it only when someone actually clicks download/upload.
+  async function downloadTemplate() {
+    const XLSX = await import("xlsx");
+    const ws = XLSX.utils.json_to_sheet([
+      { item_code: "ITM001", item_name: "Chocolate Filling", category: "fillings", unit: "kg", department: "Janakpuri" },
+      { item_code: "ITM001", item_name: "Chocolate Filling", category: "fillings", unit: "kg", department: "Sikanderpur" },
+      { item_code: "ITM002", item_name: "Cake Box 1 KG", category: "packaging", unit: "piece", department: "ALL" },
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Items");
+    XLSX.writeFile(wb, "item_upload_template.xlsx");
+  }
+
+  async function exportItems() {
+    const XLSX = await import("xlsx");
+    const ws = XLSX.utils.json_to_sheet(
+      initialItems.map((i) => ({
+        item_code: i.item_code,
+        item_name: i.item_name,
+        category: i.category,
+        unit: i.unit,
+        status: i.is_active ? "Active" : "Inactive",
+      }))
+    );
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Items");
+    XLSX.writeFile(wb, "items_export.xlsx");
+  }
+
+  async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setSummary(null);
+    const errs: string[] = [];
+
+    try {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(await file.arrayBuffer());
+      const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+
+      // One item may sit on several rows (one per department): group by item code first.
+      const { groups: all, skipped, errors: rowErrors } = groupUploadRows(rows, units);
+      errs.push(...rowErrors);
+      const renamed = all.filter((g) => g.renamed).length;
+
+      // One read for existing items + departments (was: one query per row).
+      const [existingRes, deptRes] = await Promise.all([
+        supabase.from("items").select("id, item_code"),
+        supabase.from("departments").select("id, name, is_active"),
+      ]);
+      const idByCode = new Map((existingRes.data ?? []).map((i) => [i.item_code, i.id as string]));
+      const deptRows = deptRes.data ?? [];
+      const deptMap = new Map(deptRows.map((d) => [d.name.trim().toLowerCase(), d.id as string]));
+
+      const toInsert = all.filter((r) => !idByCode.has(r.code));
+      const toUpdate = all.filter((r) => idByCode.has(r.code));
+      let created = 0;
+      let updated = 0;
+
+      // inserts: batches of 200; if a batch fails, retry row by row to report the exact bad row
+      for (const batch of chunk(toInsert, 200)) {
+        const payload = batch.map((r) => ({ item_code: r.code, item_name: r.name, category: r.category, unit: r.unit }));
+        const { data, error } = await supabase.from("items").insert(payload).select("id, item_code");
+        if (!error && data) {
+          data.forEach((d) => idByCode.set(d.item_code, d.id));
+          created += data.length;
+          continue;
+        }
+        for (const p of payload) {
+          const one = await supabase.from("items").insert(p).select("id, item_code").single();
+          if (one.error) errs.push(`${p.item_code}: ${one.error.message}`);
+          else {
+            idByCode.set(one.data.item_code, one.data.id);
+            created++;
+          }
+        }
+      }
+
+      // updates: 10 in parallel
+      for (const batch of chunk(toUpdate, 10)) {
+        const results = await Promise.all(
+          batch.map((r) =>
+            supabase.from("items").update({ item_name: r.name, category: r.category, unit: r.unit }).eq("id", idByCode.get(r.code)!)
+          )
+        );
+        results.forEach((res, i) => {
+          if (res.error) errs.push(`${batch[i].code}: ${res.error.message}`);
+          else updated++;
+        });
+      }
+
+      // mappings: every department an item is listed under (or ALL), one batched insert
+      const pairs = new Set<string>();
+      const missing = new Map<string, number>();
+      for (const g of all) {
+        const itemId = idByCode.get(g.code);
+        if (!itemId) continue;
+        const ids = new Set<string>();
+        if (g.all) deptRows.filter((d) => d.is_active !== false).forEach((d) => ids.add(d.id as string));
+        for (const name of g.departments) {
+          const id = deptMap.get(name.toLowerCase());
+          if (id) ids.add(id);
+          else missing.set(name, (missing.get(name) ?? 0) + 1);
+        }
+        ids.forEach((d) => pairs.add(`${itemId}|${d}`));
+      }
+      missing.forEach((n, name) =>
+        errs.push(`Department "${name}" not found: ${n} item(s) were not mapped to it. Add it in Departments (same spelling) and upload again.`)
+      );
+      const mappings = Array.from(pairs).map((k) => {
+        const [item_id, department_id] = k.split("|");
+        return { item_id, department_id };
+      });
+      for (const batch of chunk(mappings, 500)) {
+        // Insert only the missing mappings ("ignoreDuplicates" = ON CONFLICT DO NOTHING):
+        // existing mappings stay, and no UPDATE permission is needed on item_mappings.
+        const { error } = await supabase.from("item_mappings").upsert(batch, { onConflict: "item_id,department_id", ignoreDuplicates: true });
+        if (error) errs.push(`Mapping error: ${error.message}`);
+      }
+
+      setSummary(
+        `Created ${created} · Updated ${updated} · Skipped ${skipped} · ${mappings.length} department links` +
+          (renamed ? ` · ${renamed} item(s) had different names in different rows (the most common name was used)` : "") +
+          (errs.length ? ` · ${errs.length} issue(s)` : "")
+      );
+      toast("Upload finished.");
+      router.refresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Upload failed.", "error");
     } finally {
       setErrors(errs);
       setUploading(false);
