@@ -218,28 +218,68 @@ for (const r of all) {
   }
 
   // Add new department mapping
-  const { error: insertError } = await supabase
-    .from("item_mappings")
-    .insert({
+  // Department mappings
+// IMPORTANT: One item can belong to MULTIPLE departments.
+
+const mappings: { item_id: string; department_id: string }[] = [];
+const uploadedItemIds = new Set<string>();
+const mappingKeys = new Set<string>();
+
+for (const r of all) {
+  if (!r.department) continue;
+
+  const itemId = idByCode.get(r.code);
+  const deptId = deptMap.get(r.department.trim().toLowerCase());
+
+  if (!deptId) {
+    errs.push(`${r.code}: department "${r.department}" not found`);
+    continue;
+  }
+
+  if (!itemId) {
+    errs.push(`${r.code}: item not found`);
+    continue;
+  }
+
+  uploadedItemIds.add(itemId);
+
+  const key = `${itemId}-${deptId}`;
+
+  // Avoid duplicate same item + same department
+  if (!mappingKeys.has(key)) {
+    mappingKeys.add(key);
+
+    mappings.push({
       item_id: itemId,
       department_id: deptId,
     });
-
-  if (insertError) {
-    errs.push(`${r.code}: failed to map department - ${insertError.message}`);
   }
 }
-      setSummary(`Created ${created} · Updated ${updated} · Skipped ${skipped}${errs.length ? ` · ${errs.length} issue(s)` : ""}`);
-      toast("Upload finished.");
-      router.refresh();
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Upload failed.", "error");
-    } finally {
-      setErrors(errs);
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
+
+// Remove OLD mappings only ONCE for the uploaded items
+const itemIds = Array.from(uploadedItemIds);
+
+if (itemIds.length > 0) {
+  const { error: deleteError } = await supabase
+    .from("item_mappings")
+    .delete()
+    .in("item_id", itemIds);
+
+  if (deleteError) {
+    errs.push(`Mapping delete error: ${deleteError.message}`);
+  } else {
+    // Insert ALL department mappings from Excel
+    for (const batch of chunk(mappings, 500)) {
+      const { error: insertError } = await supabase
+        .from("item_mappings")
+        .insert(batch);
+
+      if (insertError) {
+        errs.push(`Mapping insert error: ${insertError.message}`);
+      }
     }
   }
+}
 
   return (
     <div>
