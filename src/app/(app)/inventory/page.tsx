@@ -155,7 +155,7 @@ export default async function InventoryPage({
       : Promise.resolve({ data: [] as { week_start: string; week_end: string; status: string }[] }),
     supabase
       .from("item_mappings")
-      .select("items(id, item_code, item_name, category, unit, is_active)")
+      .select("sort_order, items(id, item_code, item_name, category, unit, is_active)")
       .eq("department_id", departmentId),
   ]);
 
@@ -198,10 +198,25 @@ export default async function InventoryPage({
   );
   if (period) statusMap.set(date, period.status);
 
-  const items: Item[] = ((mapRes.data ?? []) as unknown as { items: Item | null }[])
-    .map((m) => m.items)
-    .filter((i): i is Item => !!i && i.is_active)
-    .sort((a, b) => a.item_code.localeCompare(b.item_code, undefined, { numeric: true }));
+  // Same order as the Excel that was uploaded (item_mappings.sort_order); items without an order follow by code.
+  type MapRow = { sort_order?: number | null; items: Item | null };
+  let mapRows = (mapRes.data ?? []) as unknown as MapRow[];
+  if (mapRes.error) {
+    // sort_order column not created yet (SQL not run): fall back to the plain list
+    const retry = await supabase
+      .from("item_mappings")
+      .select("items(id, item_code, item_name, category, unit, is_active)")
+      .eq("department_id", departmentId);
+    mapRows = (retry.data ?? []) as unknown as MapRow[];
+  }
+  const items: Item[] = mapRows
+    .filter((m): m is { sort_order?: number | null; items: Item } => !!m.items && m.items.is_active)
+    .sort(
+      (a, b) =>
+        (a.sort_order ?? 1e9) - (b.sort_order ?? 1e9) ||
+        a.items.item_code.localeCompare(b.items.item_code, undefined, { numeric: true })
+    )
+    .map((m) => m.items);
 
   let entries: { item_id: string; quantity: number | null }[] = [];
   if (period) {

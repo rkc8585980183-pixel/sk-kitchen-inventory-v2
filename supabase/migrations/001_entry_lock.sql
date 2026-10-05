@@ -350,6 +350,63 @@ language sql stable security definer set search_path = public as $$
    order by c.dept, c.item, p.week_end desc;
 $$;
 
+-- 5d. Super Admin only: delete ALL items (and their department mappings) in one go.
+--     Stops with an error (nothing is deleted) if the database still protects items that
+--     already have closing entries.
+create or replace function public.clear_all_items(p_confirm text)
+returns int
+language plpgsql security definer set search_path = public as $$
+declare v_role text; v_name text; v_n int;
+begin
+  select role, username into v_role, v_name from public.profiles where id = auth.uid() and is_active;
+  if v_role is distinct from 'super_admin' then
+    raise exception 'PERMISSION_DENIED: only Super Admin can clear items.' using errcode = 'P0001';
+  end if;
+  if p_confirm is distinct from 'DELETE ALL ITEMS' then
+    raise exception 'Confirmation text does not match.' using errcode = 'P0001';
+  end if;
+
+  delete from public.item_mappings;
+  delete from public.items;
+  get diagnostics v_n = row_count;
+
+  begin   -- audit trail is best effort
+    insert into public.audit_logs (username, role, action, description)
+    values (v_name, v_role, 'items_cleared', format('Deleted all %s items and their department mappings', v_n));
+  exception when others then null;
+  end;
+  return v_n;
+end $$;
+
+-- 5e. Item order per department (the order of rows in the bulk-upload Excel).
+--     sort_order is NULL for mappings made by hand; those items come after the ordered ones.
+alter table public.item_mappings add column if not exists sort_order int;
+
+--     Admin: save mappings + their order. Updates the order of mappings that already exist.
+--     p_rows = [{"item_id": "...", "department_id": "...", "sort_order": 12}, ...]
+create or replace function public.save_item_mappings(p_rows jsonb)
+returns int
+language plpgsql security definer set search_path = public as $$
+declare
+  v_uid uuid := auth.uid();
+  v_role text; v_n int;
+begin
+  if v_uid is null then raise exception 'Not signed in'; end if;
+  select role into v_role from public.profiles where id = v_uid and is_active;
+  if not found or v_role not in ('admin', 'super_admin')
+     or not (public.has_perm(v_uid, 'items') or public.has_perm(v_uid, 'mapping')) then
+    raise exception 'PERMISSION_DENIED: you cannot change item mappings.' using errcode = 'P0001';
+  end if;
+
+  insert into public.item_mappings (item_id, department_id, sort_order)
+  select (x->>'item_id')::uuid, (x->>'department_id')::uuid, nullif(x->>'sort_order', '')::int
+    from jsonb_array_elements(p_rows) x
+  on conflict (item_id, department_id)
+  do update set sort_order = coalesce(excluded.sort_order, public.item_mappings.sort_order);
+  get diagnostics v_n = row_count;
+  return v_n;
+end $$;
+
 revoke all on function public.entry_window_days(uuid) from public, anon, authenticated;
 revoke all on function public.entry_time_state(uuid) from public, anon, authenticated;
 revoke all on function public.has_perm(uuid, text) from public, anon, authenticated;
@@ -360,11 +417,15 @@ revoke all on function public.my_entry_window() from public, anon;
 revoke all on function public.start_inventory_day(uuid, date) from public, anon;
 revoke all on function public.clear_inventory_entries(uuid, uuid[]) from public, anon;
 revoke all on function public.admin_save_entries(uuid, date, jsonb) from public, anon;
+revoke all on function public.clear_all_items(text) from public, anon;
+revoke all on function public.save_item_mappings(jsonb) from public, anon;
 revoke all on function public.previous_closings(date) from public, anon;
 grant execute on function public.my_entry_window() to authenticated;
 grant execute on function public.start_inventory_day(uuid, date) to authenticated;
 grant execute on function public.clear_inventory_entries(uuid, uuid[]) to authenticated;
 grant execute on function public.admin_save_entries(uuid, date, jsonb) to authenticated;
+grant execute on function public.clear_all_items(text) to authenticated;
+grant execute on function public.save_item_mappings(jsonb) to authenticated;
 grant execute on function public.previous_closings(date) to authenticated;
 
 -- 6. Hard enforcement: block writes to entries outside the allowed window.

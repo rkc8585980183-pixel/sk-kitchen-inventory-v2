@@ -29,6 +29,9 @@ export default function ItemsClient({
   const deferred = useDeferredValue(search);
   const [editing, setEditing] = useState<Partial<Item> | null>(null);
   const [saving, setSaving] = useState(false);
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearText, setClearText] = useState("");
+  const [clearing, setClearing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
@@ -62,6 +65,31 @@ export default function ItemsClient({
     }
     toast(editing.id ? "Item updated." : "Item added.");
     setEditing(null);
+    router.refresh();
+  }
+
+  async function clearAllItems() {
+    setClearing(true);
+    const { data, error } = await supabase.rpc("clear_all_items", { p_confirm: "DELETE ALL ITEMS" });
+    setClearing(false);
+    if (error) {
+      const m = error.message;
+      toast(
+        m.includes("foreign key")
+          ? "Some items already have closing entries, so the database will not delete them. Use Deactivate for those items."
+          : m.includes("clear_all_items")
+          ? "Database update pending. Run the latest 001_entry_lock.sql in Supabase."
+          : m.includes("PERMISSION_DENIED")
+          ? "Only the Super Admin can clear items."
+          : m,
+        "error"
+      );
+      return;
+    }
+    toast(`Cleared ${data ?? 0} items.`);
+    setClearOpen(false);
+    setClearText("");
+    setSummary(null);
     router.refresh();
   }
 
@@ -165,33 +193,40 @@ export default function ItemsClient({
       }
 
       // mappings: every department an item is listed under (or ALL), one batched insert
-      const pairs = new Set<string>();
+      const pairs = new Map<string, { item_id: string; department_id: string; sort_order: number | null }>();
       const missing = new Map<string, number>();
       for (const g of all) {
         const itemId = idByCode.get(g.code);
         if (!itemId) continue;
-        const ids = new Set<string>();
-        if (g.all) deptRows.filter((d) => d.is_active !== false).forEach((d) => ids.add(d.id as string));
+        const ids = new Map<string, number | null>(); // department id -> position in the file
+        if (g.all) deptRows.filter((d) => d.is_active !== false).forEach((d) => ids.set(d.id as string, g.allSeq));
         for (const name of g.departments) {
           const id = deptMap.get(name.toLowerCase());
-          if (id) ids.add(id);
+          if (id) ids.set(id, g.seq[name.toLowerCase()] ?? null);
           else missing.set(name, (missing.get(name) ?? 0) + 1);
         }
-        ids.forEach((d) => pairs.add(`${itemId}|${d}`));
+        ids.forEach((order, d) => pairs.set(`${itemId}|${d}`, { item_id: itemId, department_id: d, sort_order: order }));
       }
       missing.forEach((n, name) =>
         errs.push(`Department "${name}" not found: ${n} item(s) were not mapped to it. Add it in Departments (same spelling) and upload again.`)
       );
-      const mappings = Array.from(pairs).map((k) => {
-        const [item_id, department_id] = k.split("|");
-        return { item_id, department_id };
-      });
+      const mappings = Array.from(pairs.values());
+      let orderSaved = true;
       for (const batch of chunk(mappings, 500)) {
-        // Insert only the missing mappings ("ignoreDuplicates" = ON CONFLICT DO NOTHING):
-        // existing mappings stay, and no UPDATE permission is needed on item_mappings.
-        const { error } = await supabase.from("item_mappings").upsert(batch, { onConflict: "item_id,department_id", ignoreDuplicates: true });
-        if (error) errs.push(`Mapping error: ${error.message}`);
+        // Preferred: one database function saves the mappings AND their order (also for mappings that already exist).
+        const { error } = await supabase.rpc("save_item_mappings", { p_rows: batch });
+        if (!error) continue;
+        if (error.code === "PGRST202" || error.message.includes("save_item_mappings")) {
+          // Function not created yet: add the missing mappings without the order (existing ones stay).
+          orderSaved = false;
+          const plain = batch.map(({ item_id, department_id }) => ({ item_id, department_id }));
+          const res = await supabase.from("item_mappings").upsert(plain, { onConflict: "item_id,department_id", ignoreDuplicates: true });
+          if (res.error) errs.push(`Mapping error: ${res.error.message}`);
+        } else {
+          errs.push(`Mapping error: ${error.message}`);
+        }
       }
+      if (!orderSaved) errs.push("Item order was NOT saved. Run the latest supabase/migrations/001_entry_lock.sql in Supabase, then upload the file again.");
 
       setSummary(
         `Created ${created} · Updated ${updated} · Skipped ${skipped} · ${mappings.length} department links` +
@@ -222,6 +257,11 @@ export default function ItemsClient({
               <Icon name="upload" size={16} /> {uploading ? "Uploading..." : "Bulk upload"}
               <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleUpload} className="hidden" />
             </label>
+            {canDelete && (
+              <Button variant="danger" icon="trash" onClick={() => setClearOpen(true)} disabled={initialItems.length === 0}>
+                Clear all items
+              </Button>
+            )}
             <Button variant="primary" icon="plus" onClick={() => setEditing({ item_code: "", item_name: "", category: "", unit: units[0] })}>
               Add item
             </Button>
@@ -320,6 +360,31 @@ export default function ItemsClient({
             </Field>
           </>
         )}
+      </Modal>
+
+      <Modal
+        open={clearOpen}
+        onClose={() => { setClearOpen(false); setClearText(""); }}
+        title="Delete ALL items?"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => { setClearOpen(false); setClearText(""); }}>Cancel</Button>
+            <Button variant="danger" loading={clearing} disabled={clearText.trim().toUpperCase() !== "DELETE"} onClick={clearAllItems}>
+              Delete all {initialItems.length} items
+            </Button>
+          </>
+        }
+      >
+        <Notice tone="danger" icon="alert">
+          This permanently deletes <b>all {initialItems.length} items</b> and their department mappings. It cannot be undone. Departments will see nothing until you upload items again.
+        </Notice>
+        <p className="text-xs text-slate-500">
+          If some items already have closing entries, the database may refuse and nothing will be deleted. In that case use Deactivate for those items.
+        </p>
+        <Field label='Type DELETE to confirm'>
+          <input value={clearText} onChange={(e) => setClearText(e.target.value)} className={inputCls} placeholder="DELETE" autoComplete="off" />
+        </Field>
       </Modal>
     </div>
   );
