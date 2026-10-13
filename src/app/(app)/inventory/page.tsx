@@ -83,15 +83,19 @@ export default async function InventoryPage({
       }
     }
   }
-  // Header + date bar are frozen on tablet / desktop (on phones only the date bar stays, to keep space).
-  const frame = (content: React.ReactNode, bar?: React.ReactNode) => (
-    <>
-      <div className="contents md:sticky md:top-0 md:z-40 md:block md:shadow-md">
-        <DeptHeader deptName={deptName} userName={profile.full_name} pills={pills} />
-        {bar}
-      </div>
-      <div className="mx-auto max-w-6xl space-y-3 px-4 py-3 sm:px-6">{content}</div>
-    </>
+  // deptHeaderProps are forwarded to InventoryForm so the header owns date/search/category.
+  const deptHeaderProps = {
+    deptName,
+    userName: profile.full_name,
+    pills,
+    date,
+    min: minDate,
+    max: today,
+    onDateChange: () => {},   // navigation is handled via Next.js links; unused at render time
+    pending: false,
+  };
+  const frame = (content: React.ReactNode) => (
+    <>{content}</>
   );
 
   const departmentId = admin ? params.department || departments[0]?.id || null : profile.department_id;
@@ -257,37 +261,30 @@ export default async function InventoryPage({
       </Card>
     ) : null;
 
+    if (stateCard) {
+      return (
+        <>
+          <DeptHeader {...deptHeaderProps}
+            search="" onSearch={() => {}} category="all" categories={[]} onCategory={() => {}}
+            entered={0} total={0} statusEl={null} saveStatusEl={null} />
+          <div className="mx-auto max-w-6xl px-4 py-4 sm:px-6">{stateCard}</div>
+        </>
+      );
+    }
     return frame(
-      stateCard ??
-        (period && (
-          <InventoryForm
-            key={period.id}
-            variant="department"
-            period={period}
-            items={items}
-            initialEntries={entries}
-            canEdit={period.status !== "submitted"}
-            canUnlock={false}
-            focusItemId={params.item}
-          />
-        )),
-      <InventoryFilters
-        variant="department"
-        departments={[]}
-        selectedDepartment={departmentId}
-        showDepartments={false}
-        date={date}
-        min={minDate}
-        max={today}
-        closingNote={scheduleOn && !notScheduled ? `Closing required · ${describeSchedule(schedule)}` : undefined}
-        recent={chipDates.map((d) => ({
-          date: d,
-          label: chipLabel(d, today),
-          status: statusMap.get(d) ?? null,
-          scheduled: scheduleOn ? isClosingDate(schedule, d) : true,
-          disabled: !!policy.cutoff && d < policy.cutoff,
-        }))}
-      />
+      period ? (
+        <InventoryForm
+          key={period.id}
+          variant="department"
+          deptHeaderProps={deptHeaderProps}
+          period={period}
+          items={items}
+          initialEntries={entries}
+          canEdit={period.status !== "submitted"}
+          canUnlock={false}
+          focusItemId={params.item}
+        />
+      ) : null
     );
   }
 
