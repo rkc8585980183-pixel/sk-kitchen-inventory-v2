@@ -83,19 +83,20 @@ export default async function InventoryPage({
       }
     }
   }
-  // deptHeaderProps are forwarded to InventoryForm so the header owns date/search/category.
-  const deptHeaderProps = {
-    deptName,
-    userName: profile.full_name,
-    pills,
-    date,
-    min: minDate,
-    max: today,
-    onDateChange: () => {},   // navigation is handled via Next.js links; unused at render time
-    pending: false,
-  };
+  // Header (with the date picker) is sticky. NOTE: only plain data is passed to DeptHeader
+  // (a Server Component cannot pass functions to a Client Component).
   const frame = (content: React.ReactNode) => (
-    <>{content}</>
+    <>
+      <DeptHeader
+        deptName={deptName}
+        userName={profile.full_name}
+        pills={pills}
+        date={date}
+        min={minDate}
+        max={today}
+      />
+      <div className="mx-auto max-w-6xl space-y-3 px-4 py-3 sm:px-6">{content}</div>
+    </>
   );
 
   const departmentId = admin ? params.department || departments[0]?.id || null : profile.department_id;
@@ -261,30 +262,29 @@ export default async function InventoryPage({
       </Card>
     ) : null;
 
-    if (stateCard) {
-      return (
-        <>
-          <DeptHeader {...deptHeaderProps}
-            search="" onSearch={() => {}} category="all" categories={[]} onCategory={() => {}}
-            entered={0} total={0} statusEl={null} saveStatusEl={null} />
-          <div className="mx-auto max-w-6xl px-4 py-4 sm:px-6">{stateCard}</div>
-        </>
-      );
-    }
-    return frame(
-      period ? (
-        <InventoryForm
-          key={period.id}
-          variant="department"
-          deptHeaderProps={deptHeaderProps}
-          period={period}
-          items={items}
-          initialEntries={entries}
-          canEdit={period.status !== "submitted"}
-          canUnlock={false}
-          focusItemId={params.item}
-        />
-      ) : null
+    if (stateCard) return frame(stateCard);
+    if (!period) return frame(null);
+
+    // Full-screen form: the header (date + search + category) lives inside InventoryForm.
+    return (
+      <InventoryForm
+        key={period.id}
+        variant="department"
+        period={period}
+        items={items}
+        initialEntries={entries}
+        canEdit={period.status !== "submitted"}
+        canUnlock={false}
+        focusItemId={params.item}
+        deptHeaderProps={{
+          deptName,
+          userName: profile.full_name,
+          pills,
+          date,
+          min: minDate,
+          max: today,
+        }}
+      />
     );
   }
 

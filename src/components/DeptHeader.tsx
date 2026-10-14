@@ -19,28 +19,30 @@ export interface DeptHeaderProps {
   date: string;
   min?: string;
   max: string;
-  onDateChange: (d: string) => void;
-  pending?: boolean;
-  /* search + category */
-  search: string;
-  onSearch: (v: string) => void;
-  category: string;
-  categories: string[];
-  onCategory: (v: string) => void;
-  /* status */
-  entered: number;
-  total: number;
-  statusEl: React.ReactNode;
-  saveStatusEl: React.ReactNode;
+  /* search + category (optional: only passed by InventoryForm, a client component) */
+  search?: string;
+  onSearch?: (v: string) => void;
+  category?: string;
+  categories?: string[];
+  onCategory?: (v: string) => void;
+  /* status (optional) */
+  entered?: number;
+  total?: number;
+  statusEl?: React.ReactNode;
+  saveStatusEl?: React.ReactNode;
 }
 
 export default function DeptHeader({
   deptName, userName, pills,
-  date, min, max, onDateChange, pending,
-  search, onSearch, category, categories, onCategory,
-  entered, total, statusEl, saveStatusEl,
+  date, min, max,
+  search = "", onSearch, category = "all", categories = [], onCategory,
+  entered = 0, total = 0, statusEl, saveStatusEl,
 }: DeptHeaderProps) {
   const router = useRouter();
+  const [pending, startNav] = useTransition();
+  // date change is handled here (a function cannot be passed from a Server Component)
+  const onDateChange = (d: string) => startNav(() => router.push(`/inventory?date=${d}`));
+  const showTools = !!onSearch && !!onCategory;
   const [busy, setBusy] = useState(false);
   const [val, setVal] = useState(date);
   useEffect(() => setVal(date), [date]);
@@ -115,13 +117,14 @@ export default function DeptHeader({
           {/* divider */}
           <span className="hidden h-4 w-px bg-white/20 sm:block" />
 
+          {showTools && (<>
           {/* search */}
           <div className="relative w-44">
             <Icon name="search" size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-white/50" />
             <input
               type="text"
               value={search}
-              onChange={(e) => onSearch(e.target.value)}
+              onChange={(e) => onSearch?.(e.target.value)}
               placeholder="Search item or code"
               className={cn(input, "pl-6 w-full")}
               aria-label="Search items"
@@ -131,7 +134,7 @@ export default function DeptHeader({
           {/* category */}
           <select
             value={category}
-            onChange={(e) => onCategory(e.target.value)}
+            onChange={(e) => onCategory?.(e.target.value)}
             className={cn(input, "pr-6")}
             style={{ appearance: "none", backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%23fff' stroke-opacity='.5' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E")`, backgroundRepeat: "no-repeat", backgroundPosition: "right 6px center", backgroundSize: "14px", paddingRight: "22px" }}
             aria-label="Category"
@@ -139,16 +142,19 @@ export default function DeptHeader({
             <option value="all" style={{ background: BG }}>All categories</option>
             {categories.map((c) => <option key={c} value={c} style={{ background: BG }}>{c}</option>)}
           </select>
+          </>)}
 
           {/* spacer */}
           <div className="flex-1" />
 
           {/* count + status + autosave */}
+          {showTools && (
           <div className="flex items-center gap-2 text-[11px] text-white/70">
             <span className="tabular-nums">{entered}/{total}</span>
             {statusEl}
             {saveStatusEl}
           </div>
+          )}
 
           {/* legend (desktop only) */}
           <div className="hidden items-center gap-3 text-[10px] text-white/50 lg:flex">
