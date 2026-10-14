@@ -78,7 +78,7 @@ export default function DeptHeader({
         {/* greeting */}
         <div className="min-w-0 flex-1">
           <span className="text-xs font-bold sm:text-sm">Hello, {deptName} Team 👋</span>
-          <span className="ml-2 hidden text-[11px] text-white/60 sm:inline">— Update your closing stock</span>
+          <span className="ml-2 hidden text-[11px] text-white/60 md:inline">— Update your closing stock</span>
         </div>
 
         {/* pills */}
@@ -156,12 +156,6 @@ export default function DeptHeader({
           </div>
           )}
 
-          {/* legend (desktop only) */}
-          <div className="hidden items-center gap-3 text-[10px] text-white/50 lg:flex">
-            <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" /> Submitted</span>
-            <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-orange-400" /> Draft</span>
-            <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full border border-white/30 bg-transparent" /> New</span>
-          </div>
         </div>
       </div>
     </header>

@@ -60,6 +60,57 @@ const ItemRow = memo(function ItemRow({
   );
 });
 
+/* ─── simple card-style row (department panel) ─── */
+const DeptRow = memo(function DeptRow({
+  item, value, disabled, dirty, focus, onChange,
+}: {
+  item: Item; value: string; disabled: boolean; dirty: boolean; focus: boolean;
+  onChange: (id: string, v: string) => void;
+}) {
+  return (
+    <div
+      id={`item-${item.id}`}
+      className={cn(
+        "flex items-center gap-3 border-b border-slate-100 px-3 py-2 transition-colors last:border-b-0 sm:px-4",
+        focus ? "bg-yellow-50" : dirty ? "bg-amber-50" : "hover:bg-[#fdf4f5]"
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-semibold leading-tight text-slate-900">{item.item_name}</p>
+        <p className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-slate-400">
+          <span className="font-mono">{item.item_code}</span>
+          {item.category && (<><span>·</span><span className="truncate capitalize">{item.category}</span></>)}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <input
+          data-qty type="number" inputMode="decimal" min={0} step="any"
+          disabled={disabled} value={value} placeholder="0"
+          aria-label={`Qty for ${item.item_name}`}
+          onWheel={(e) => e.currentTarget.blur()}
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e) => onChange(item.id, e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" && e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+            e.preventDefault();
+            const all = Array.from(document.querySelectorAll<HTMLInputElement>("input[data-qty]:not(:disabled)"));
+            const at = all.indexOf(e.currentTarget);
+            all[e.key === "ArrowUp" ? at - 1 : at + 1]?.focus();
+          }}
+          className={cn(
+            "h-9 w-24 rounded-lg border bg-white px-2.5 text-right text-sm font-semibold tabular-nums text-slate-900 placeholder:font-normal placeholder:text-slate-300",
+            "focus:border-[#3C0618] focus:outline-none focus:ring-2 focus:ring-[#3C0618]/20 disabled:cursor-default disabled:bg-slate-50 disabled:opacity-70",
+            dirty ? "border-amber-400 bg-amber-50" : "border-slate-300"
+          )}
+        />
+        <span className="w-14 truncate rounded-md bg-slate-100 px-1.5 py-1 text-center text-[10px] font-semibold uppercase text-slate-500">
+          {item.unit}
+        </span>
+      </div>
+    </div>
+  );
+});
+
 const AUTOSAVE_MS = 1000;
 
 export default function InventoryForm({
@@ -254,34 +305,28 @@ export default function InventoryForm({
           </div>
         )}
 
-        {/* ── scrollable table – fills all remaining height ── */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <table className="w-full border-collapse" style={{ minWidth: 480 }}>
-            <thead className="sticky top-0 z-10">
-              <tr style={{ background: BG, color: "#fff" }}>
-                <th className="hidden px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-wide md:table-cell" style={{ width: 90 }}>Code</th>
-                <th className="px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-wide">Item Name</th>
-                <th className="hidden px-2.5 py-2 text-left text-[11px] font-bold uppercase tracking-wide md:table-cell" style={{ width: 136 }}>Category</th>
-                <th className="hidden px-2.5 py-2 text-center text-[11px] font-bold uppercase tracking-wide md:table-cell" style={{ width: 64 }}>Unit</th>
-                <th className="px-2.5 py-2 text-right text-[11px] font-bold uppercase tracking-wide" style={{ width: 108 }}>Qty</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((i) => (
-                <ItemRow key={i.id} item={i} value={quantities[i.id] ?? ""} disabled={!canEdit}
-                  dirty={dirtySet.has(i.id)} focus={i.id === focusItemId} large={true} onChange={onChange} />
-              ))}
-            </tbody>
-          </table>
-          {filtered.length === 0 && (
-            <p className="px-5 py-10 text-center text-sm text-slate-400">
-              {items.length === 0 ? "No items mapped to this department yet." : "No items match your search."}
-            </p>
-          )}
+        {/* ── simple item list – fills all remaining height ── */}
+        <div className="min-h-0 flex-1 overflow-y-auto bg-[#faf6f7] px-2 py-3 sm:px-4">
+          <div className="mx-auto w-full max-w-3xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[#ecd3d8] bg-[#f6e9ec] px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-[#3C0618] sm:px-4">
+              <span>Item</span>
+              <span>Closing qty</span>
+            </div>
+            {filtered.map((i) => (
+              <DeptRow key={i.id} item={i} value={quantities[i.id] ?? ""} disabled={!canEdit}
+                dirty={dirtySet.has(i.id)} focus={i.id === focusItemId} onChange={onChange} />
+            ))}
+            {filtered.length === 0 && (
+              <p className="px-5 py-10 text-center text-sm text-slate-400">
+                {items.length === 0 ? "No items mapped to this department yet." : "No items match your search."}
+              </p>
+            )}
+          </div>
         </div>
 
         {/* ── fixed action bar ── */}
-        <div className="flex shrink-0 items-center gap-2 border-t border-[#e8c8cf] bg-white px-4 py-2 sm:px-5">
+        <div className="shrink-0 border-t border-[#e8c8cf] bg-white px-4 py-2.5 sm:px-5">
+         <div className="mx-auto flex w-full max-w-3xl items-center gap-2">
           {canEdit ? (
             <>
               <button onClick={handleSaveDraft} disabled={submitting || status === "saving" || dirtyIds.length === 0}
@@ -294,7 +339,7 @@ export default function InventoryForm({
                 Clear All
               </button>
               <button onClick={() => setConfirmSubmit(true)} disabled={status === "saving" || items.length === 0 || submitting}
-                className="ml-auto inline-flex h-8 items-center gap-2 rounded px-5 text-xs font-bold text-white shadow hover:opacity-90 disabled:opacity-50"
+                className="ml-auto inline-flex h-9 items-center gap-2 rounded-lg px-5 text-xs font-bold text-white shadow hover:opacity-90 disabled:opacity-50"
                 style={{ background: BG }}>
                 {submitting ? <Spinner className="h-3.5 w-3.5 text-white" /> : <Icon name="check" size={13} />}
                 Submit Closing Stock
@@ -306,6 +351,7 @@ export default function InventoryForm({
               <Icon name="unlock" size={13} /> Unlock for editing
             </button>
           ) : <span className="text-xs text-slate-400">Read only</span>}
+         </div>
         </div>
 
         {/* modals */}
