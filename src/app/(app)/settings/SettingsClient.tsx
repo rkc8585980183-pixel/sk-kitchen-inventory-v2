@@ -177,7 +177,7 @@ export default function SettingsClient({
           <Notice tone="warning" icon="lock">
             <p className="font-medium">One-time setup needed</p>
             <p className="mt-1">
-              Open Supabase → SQL Editor and run <code className="rounded bg-amber-100 px-1">supabase/migrations/001_entry_lock.sql</code>, then reload this page.
+              Open Supabase → SQL Editor and run <code className="rounded bg-amber-100 px-1">supabase/migrations/001_entry_lock.sql</code> then <code className="rounded bg-amber-100 px-1">002_superadmin_dashboard.sql</code>, then reload this page.
             </p>
           </Notice>
         </div>
@@ -264,13 +264,13 @@ export default function SettingsClient({
         })()}
       </Card>
 
-      <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Entry time</p>
+      <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Common Entry Schedule (all outlets &amp; departments)</p>
       <Card className="mb-8 p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="font-semibold text-slate-900">Daily entry time</h2>
+            <h2 className="font-semibold text-slate-900">Common Entry Schedule</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Department users can open, enter and submit inventory only between these two times. Before the opening time and after the closing time the entry is closed. Admins and Super Admin are not affected.
+              One schedule applies to <b>all outlets and departments</b>. Department users can only open, enter and submit inventory between these two times (India time). At the closing time, any unsubmitted entries are <b>automatically locked</b> (shown as &ldquo;Locked – Pending&rdquo;) — Super Admin can manually unlock them. Admins and Super Admin are never time-restricted.
             </p>
           </div>
           <button
@@ -285,22 +285,22 @@ export default function SettingsClient({
         </div>
 
         <div className={cn("mt-5 grid gap-4 sm:grid-cols-2", !timeOn && "pointer-events-none opacity-50")}>
-          <Field label="Opens at (India time)">
+          <Field label="Entry opens at (India time, all outlets)">
             <input type="time" value={openT} onChange={(e) => e.target.value && setOpenT(e.target.value)} className={inputCls} />
           </Field>
-          <Field label="Closes at (India time)">
+          <Field label="Entry closes &amp; auto-locks at (India time, all outlets)">
             <input type="time" value={closeT} onChange={(e) => e.target.value && setCloseT(e.target.value)} className={inputCls} />
           </Field>
         </div>
 
         <p className="mt-4 text-xs text-slate-500">
           {!timeOn
-            ? "Time limit is OFF: departments can enter at any time of the day."
+            ? "Common Entry Schedule is OFF: departments can enter at any time of the day. Entries will NOT auto-lock."
             : openT === closeT
             ? "Open and close time are the same, so entry stays open all day."
             : openT < closeT
-            ? `Departments can enter every day from ${fmtTime12(openT)} to ${fmtTime12(closeT)}.`
-            : `Overnight window: opens ${fmtTime12(openT)} and closes ${fmtTime12(closeT)} the next morning.`}
+            ? `All departments: entry open ${fmtTime12(openT)} – ${fmtTime12(closeT)} (IST). Entries auto-lock at ${fmtTime12(closeT)}.`
+            : `Overnight window: opens ${fmtTime12(openT)} and closes ${fmtTime12(closeT)} the next morning. Entries auto-lock at ${fmtTime12(closeT)}.`}
         </p>
       </Card>
 

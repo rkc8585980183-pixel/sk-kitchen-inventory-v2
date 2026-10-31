@@ -151,6 +151,7 @@ const badgeTones = {
   orange: "bg-orange-50 text-orange-700 ring-orange-600/20",
   red: "bg-red-50 text-red-700 ring-red-600/15",
   blue: "bg-sky-50 text-sky-700 ring-sky-600/15",
+  purple: "bg-purple-50 text-purple-700 ring-purple-600/15",
 };
 
 export function Badge({
@@ -180,9 +181,12 @@ export function Badge({
 
 export function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { tone: keyof typeof badgeTones; label: string }> = {
-    submitted: { tone: "green", label: "Submitted" },
-    pending: { tone: "slate", label: "Pending" },
-    unlocked: { tone: "amber", label: "Unlocked" },
+    submitted:   { tone: "green",  label: "Completed – Locked" },
+    pending:     { tone: "slate",  label: "Pending" },
+    unlocked:    { tone: "amber",  label: "Unlocked" },
+    time_locked: { tone: "purple", label: "Locked – Pending" },
+    missed:      { tone: "red",    label: "Missed" },
+    no_entry:    { tone: "slate",  label: "Not started" },
   };
   const m = map[status] ?? { tone: "slate" as const, label: status };
   return (
@@ -201,6 +205,29 @@ export function ProgressBar({ value, max, tone = "orange" }: { value: number; ma
         className={cn("h-full rounded-full transition-all duration-300", tone === "green" ? "bg-emerald-500" : "bg-orange-500")}
         style={{ width: `${pct}%` }}
       />
+    </div>
+  );
+}
+
+/** Multi-segment compliance bar: green=completed, purple=locked-pending, red=missed, slate=pending */
+export function ComplianceBar({
+  completed,
+  lockedPending,
+  missed,
+  total,
+}: {
+  completed: number;
+  lockedPending: number;
+  missed: number;
+  total: number;
+}) {
+  if (total === 0) return null;
+  const pct = (n: number) => `${Math.round((n / total) * 100)}%`;
+  return (
+    <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+      <div className="h-full bg-emerald-500 transition-all" style={{ width: pct(completed) }} title={`Completed: ${completed}`} />
+      <div className="h-full bg-purple-400 transition-all" style={{ width: pct(lockedPending) }} title={`Locked-Pending: ${lockedPending}`} />
+      <div className="h-full bg-red-400 transition-all" style={{ width: pct(missed) }} title={`Missed: ${missed}`} />
     </div>
   );
 }

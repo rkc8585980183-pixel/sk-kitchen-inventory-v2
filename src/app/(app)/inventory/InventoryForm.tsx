@@ -168,6 +168,7 @@ export default function InventoryForm({
     if (msg.includes("PERMISSION_DENIED")) return "You do not have permission for this action.";
     if (msg.includes("ENTRY_CLOSED")) return "Entry time is over.";
     if (msg.includes("ENTRY_LOCKED")) return "This date is locked. Contact the Super Admin.";
+    if (msg.includes("ENTRY_TIME_LOCKED")) return "Entry was automatically locked at closing time. Contact the Super Admin to unlock.";
     if (msg.includes("ENTRY_SUBMITTED")) return "This entry is already submitted and locked.";
     if (msg.includes("clear_inventory_entries")) return "Database update pending. Run the latest 001_entry_lock.sql.";
     return msg;
@@ -292,6 +293,11 @@ export default function InventoryForm({
         />
 
         {/* submitted / unlocked notice */}
+        {period.status === "time_locked" && (
+          <Notice tone="warning" icon="lock">
+            <span><b>Locked – Pending.</b> The entry window has closed and this entry was automatically locked before submission. The Super Admin can unlock it.</span>
+          </Notice>
+        )}
         {period.status === "submitted" && (
           <div className="flex shrink-0 items-center gap-2 border-b border-emerald-200 bg-emerald-50 px-5 py-1.5 text-xs text-emerald-800">
             <Icon name="lock" size={13} />
@@ -381,6 +387,12 @@ export default function InventoryForm({
   /* ══════════════ ADMIN PANEL (unchanged) ══════════════ */
   return (
     <>
+      {period.status === "time_locked" && (
+        <Notice tone="warning" icon="lock">
+          This entry is <b>Locked – Pending</b>: auto-locked at closing time before submission.{" "}
+          Use the Dashboard unlock button to reopen it.
+        </Notice>
+      )}
       {period.status === "submitted" && (
         <Notice tone="success" icon="lock">
           This entry is <b>submitted and locked</b>.{" "}

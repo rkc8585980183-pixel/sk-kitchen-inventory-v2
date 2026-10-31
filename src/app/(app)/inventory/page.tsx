@@ -6,7 +6,7 @@ import { getEntryPolicy, getEntryTime, isPeriodOpen } from "@/lib/lock";
 import { getClosingSchedule } from "@/lib/closing";
 import { DEFAULT_SCHEDULE, describeSchedule, isClosingDate, isScheduleOn, latestClosingOnOrBefore, nextClosingAfter } from "@/lib/closingSchedule";
 import { addDays, chipLabel, fmtDay, fmtTime12, fmtWeekday, nowHHMM, todayIST } from "@/lib/utils";
-import type { Item, PeriodLite } from "@/types";
+import type { Item, PeriodLite, PeriodStatus } from "@/types";
 import { Badge, buttonCls, Card, EmptyState, Notice, PageHeader } from "@/components/ui";
 import DeptHeader, { type Pill } from "@/components/DeptHeader";
 import InventoryFilters from "./InventoryFilters";
@@ -172,9 +172,9 @@ export default async function InventoryPage({
     const row = Array.isArray(startRes.data) ? startRes.data[0] : startRes.data;
     if (startRes.error) {
       const msg = startRes.error.message;
-      if (msg.includes("ENTRY_LOCKED")) locked = true;
+      if (msg.includes("ENTRY_LOCKED") || msg.includes("ENTRY_TIME_LOCKED")) locked = true;
       else if (startRes.error.code === "PGRST202" || msg.includes("start_inventory_day"))
-        loadError = "Database update pending. Ask the Super Admin to run supabase/migrations/001_entry_lock.sql in Supabase.";
+        loadError = "Database update pending. Ask the Super Admin to run supabase/migrations/001_entry_lock.sql and 002_superadmin_dashboard.sql in Supabase.";
       else loadError = msg;
     } else if (row) {
       period = {
@@ -182,7 +182,7 @@ export default async function InventoryPage({
         inv_code: row.inv_code,
         week_start: row.week_start,
         week_end: row.week_end,
-        status: row.status,
+        status: row.status as PeriodStatus,
       };
     }
   }
@@ -234,8 +234,10 @@ export default async function InventoryPage({
     const latest = scheduleOn ? latestClosingOnOrBefore(schedule, today) : null;
     const stateCard = locked ? (
       <Card>
-        <EmptyState icon="lock" title="This date is locked">
-          {policy.limitDays === 0
+        <EmptyState icon="lock" title={period?.status === "time_locked" ? "Entry locked – closing time passed" : "This date is locked"}>
+          {period?.status === "time_locked"
+            ? "The entry window has closed. Your entry was automatically locked. Please contact the Super Admin to unlock it for re-entry."
+            : policy.limitDays === 0
             ? "Entry is currently locked for your account. Contact the Super Admin."
             : `You can open only the last ${policy.limitDays ?? ""} day(s). Older dates can be opened only by the Super Admin.`}
         </EmptyState>
@@ -327,8 +329,13 @@ export default async function InventoryPage({
 
       {locked || !period ? (
         <Card>
-          <EmptyState icon="lock" title="This date is locked">
-            {policy.limitDays === 0
+          <EmptyState
+            icon="lock"
+            title={period?.status === "time_locked" ? "Entry auto-locked at closing time" : "This date is locked"}
+          >
+            {period?.status === "time_locked"
+              ? "This entry was automatically locked when the entry window closed. Use the Unlock button on the Dashboard to reopen it."
+              : policy.limitDays === 0
               ? "Entry is currently locked for your account. Contact the Super Admin."
               : `You can open only the last ${policy.limitDays ?? ""} day(s). Older dates can be opened only by the Super Admin.`}
           </EmptyState>

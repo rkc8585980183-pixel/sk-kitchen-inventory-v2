@@ -32,7 +32,8 @@ export interface Item {
   is_active: boolean;
 }
 
-export type PeriodStatus = "pending" | "submitted" | "unlocked";
+/** time_locked = auto-locked at closing time before submission (Locked – Pending) */
+export type PeriodStatus = "pending" | "submitted" | "unlocked" | "time_locked";
 
 export interface InventoryPeriod {
   id: string;
@@ -62,4 +63,21 @@ export interface LockSettings {
   enabled: boolean;
   default_department_days: number;
   default_admin_days: number;
+  time_lock_enabled: boolean;
+  entry_open_time: string;
+  entry_close_time: string;
+}
+
+/** One row returned by dashboard_status() DB function */
+export interface DashboardRow {
+  department_id: string;
+  department_name: string;
+  department_code: string;
+  outlet_code: string;
+  entry_status: "pending" | "submitted" | "unlocked" | "time_locked" | "missed" | "no_entry";
+  submitted_at: string | null;
+  unlocked_at: string | null;
+  inv_code: string | null;
+  item_count: number;
+  filled_count: number;
 }

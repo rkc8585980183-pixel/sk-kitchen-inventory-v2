@@ -54,3 +54,15 @@ export const getEntryTime = cache(async (): Promise<EntryTime> => {
     close: data.close_time ?? null,
   };
 });
+
+/**
+ * Is the entry window currently open globally?
+ * Used by the dashboard to show current schedule state without user-role filtering.
+ * Falls back to true if the DB function is not yet available.
+ */
+export const getIsWithinEntryWindow = cache(async (): Promise<boolean> => {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("is_within_entry_window");
+  if (error) return true; // safe default: show as open if function not available
+  return !!data;
+});
