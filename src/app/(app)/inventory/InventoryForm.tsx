@@ -125,6 +125,8 @@ export default function InventoryForm({
   canEdit: boolean;
   canUnlock: boolean;
   focusItemId?: string;
+  /** "weekly" | "monthly" — shown as a chip in the header */
+  closingType?: string;
   variant?: "admin" | "department";
   deptHeaderProps?: Omit<DeptHeaderProps,
     "search"|"onSearch"|"category"|"categories"|"onCategory"|
@@ -288,7 +290,17 @@ export default function InventoryForm({
           search={search} onSearch={setSearch}
           category={category} categories={categories} onCategory={setCategory}
           entered={entered} total={items.length}
-          statusEl={<StatusBadge status={period.status} />}
+          statusEl={<StatusBadge status={period.status} />
+              {closingType && (
+                <span className={
+                  "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset " +
+                  (closingType === "monthly"
+                    ? "bg-violet-50 text-violet-700 ring-violet-600/15"
+                    : "bg-sky-50 text-sky-700 ring-sky-600/15")
+                }>
+                  {closingType === "monthly" ? "Monthly closing" : "Weekly closing"}
+                </span>
+              )}}
           saveStatusEl={saveStatusEl}
         />
 

@@ -7,6 +7,7 @@ import { getClosingSchedule } from "@/lib/closing";
 import { DEFAULT_SCHEDULE, describeSchedule, isClosingDate, isScheduleOn, latestClosingOnOrBefore, nextClosingAfter } from "@/lib/closingSchedule";
 import { addDays, chipLabel, fmtDay, fmtTime12, fmtWeekday, nowHHMM, todayIST } from "@/lib/utils";
 import type { Item, PeriodLite, PeriodStatus } from "@/types";
+import { detectClosingType, closingTypeLabel } from "@/lib/closingType";
 import { Badge, buttonCls, Card, EmptyState, Notice, PageHeader } from "@/components/ui";
 import DeptHeader, { type Pill } from "@/components/DeptHeader";
 import InventoryFilters from "./InventoryFilters";
@@ -149,7 +150,7 @@ export default async function InventoryPage({
     chipDates = Array.from({ length: recentCount }, (_, i) => addDays(today, -i));
   }
 
-  const [startRes, statusRes, mapRes] = await Promise.all([
+  const [startRes, statusRes, mapRes, settingsRes] = await Promise.all([
     open ? supabase.rpc("start_inventory_day", { p_department_id: departmentId, p_date: date }) : Promise.resolve(null),
     chipDates.length
       ? supabase
@@ -160,8 +161,9 @@ export default async function InventoryPage({
       : Promise.resolve({ data: [] as { week_start: string; week_end: string; status: string }[] }),
     supabase
       .from("item_mappings")
-      .select("sort_order, items(id, item_code, item_name, category, unit, is_active)")
+      .select("sort_order, period_type, items(id, item_code, item_name, category, unit, is_active)")
       .eq("department_id", departmentId),
+    supabase.from("lock_settings").select("closing_mode").eq("id", 1).maybeSingle(),
   ]);
 
   let locked = !periodOpen;
@@ -204,24 +206,37 @@ export default async function InventoryPage({
   if (period) statusMap.set(date, period.status);
 
   // Same order as the Excel that was uploaded (item_mappings.sort_order); items without an order follow by code.
-  type MapRow = { sort_order?: number | null; items: Item | null };
+  // Detect closing type (weekly vs monthly) for this period
+  const closingMode = settingsRes.data?.closing_mode ?? null;
+  // Use today's date as fallback period dates when period isn't loaded yet
+  const periodStart = period?.week_start ?? date;
+  const periodEnd   = period?.week_end   ?? date;
+  const closingType = detectClosingType(periodStart, periodEnd, closingMode);
+
+  type MapRow = { sort_order?: number | null; period_type?: string | null; items: Item | null };
   let mapRows = (mapRes.data ?? []) as unknown as MapRow[];
   if (mapRes.error) {
-    // sort_order column not created yet (SQL not run): fall back to the plain list
+    // Fallback if period_type column not yet available
     const retry = await supabase
       .from("item_mappings")
       .select("items(id, item_code, item_name, category, unit, is_active)")
       .eq("department_id", departmentId);
     mapRows = (retry.data ?? []) as unknown as MapRow[];
   }
+
+  // Filter by period_type: show item if period_type = 'both', or matches closingType, or null/missing (legacy)
   const items: Item[] = mapRows
-    .filter((m): m is { sort_order?: number | null; items: Item } => !!m.items && m.items.is_active)
+    .filter((m): m is { sort_order?: number | null; period_type?: string | null; items: Item } => {
+      if (!m.items || !m.items.is_active) return false;
+      const pt = m.period_type ?? "both";
+      return pt === "both" || pt === closingType;
+    })
     .sort(
       (a, b) =>
         (a.sort_order ?? 1e9) - (b.sort_order ?? 1e9) ||
-        a.items.item_code.localeCompare(b.items.item_code, undefined, { numeric: true })
+        a.items!.item_code.localeCompare(b.items!.item_code, undefined, { numeric: true })
     )
-    .map((m) => m.items);
+    .map((m) => m.items!);
 
   let entries: { item_id: string; quantity: number | null }[] = [];
   if (period) {
@@ -275,9 +290,10 @@ export default async function InventoryPage({
         period={period}
         items={items}
         initialEntries={entries}
-        canEdit={period.status !== "submitted"}
+        canEdit={period.status !== "submitted" && period.status !== "time_locked"}
         canUnlock={false}
         focusItemId={params.item}
+        closingType={closingType}
         deptHeaderProps={{
           deptName,
           userName: profile.full_name,
@@ -297,7 +313,7 @@ export default async function InventoryPage({
     <div className="space-y-5">
       <PageHeader
         title="Inventory entry"
-        subtitle={`${adminDeptName ? `${adminDeptName} · ` : ""}${fmtWeekday(date)}`}
+        subtitle={`${adminDeptName ? `${adminDeptName} · ` : ""}${fmtWeekday(date)} · ${closingTypeLabel(closingType)}`}
         actions={
           policy.limitDays === null ? (
             <Badge tone="green">No date limit</Badge>
@@ -346,9 +362,10 @@ export default async function InventoryPage({
           period={period}
           items={items}
           initialEntries={entries}
-          canEdit={period.status !== "submitted"}
+          canEdit={period.status !== "submitted" && period.status !== "time_locked"}
           canUnlock={can(profile, "entries_unlock")}
           focusItemId={params.item}
+          closingType={closingType}
         />
       )}
     </div>
